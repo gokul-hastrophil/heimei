@@ -1,0 +1,18 @@
+hostname: heimei
+
+user: kniti
+
+platform:
+  os: ubuntu
+  version: "26.04"
+
+hardware:
+  cpu: Intel i5-11400H
+  gpu: RTX3050
+  ram: 16GB
+
+network:
+  tailscale: true
+
+remote:
+  macmini: true
