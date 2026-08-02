@@ -1,0 +1,23 @@
+[project]
+name = "heimei"
+version = "0.1.0"
+description = "Personal AI Operating Layer"
+readme = "README.md"
+requires-python = ">=3.13"
+
+dependencies = [
+    "typer",
+    "rich",
+    "pydantic",
+    "pydantic-settings",
+    "pyyaml",
+    "loguru",
+    "psutil",
+    "platformdirs"
+]
+
+[project.scripts]
+heimei = "heimei.main:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
