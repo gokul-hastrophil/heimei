@@ -1,0 +1,4 @@
+level: INFO
+console: true
+file: true
+directory: State/Logs
