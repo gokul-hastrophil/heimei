@@ -5,6 +5,7 @@ last_reviewed: 2026-08-06
 references:
   - State/Reports/m1-completion-review.md
   - State/Reports/engineering-report.md
+  - ../../../ROADMAP.md
 ---
 
 # Heimei CLI — Roadmap
@@ -12,6 +13,8 @@ references:
 ## Purpose
 
 What's next for `Projects/Heimei` after Milestone M1. Each item below is a candidate for its own proposal → approval → implementation → freeze cycle (the same cycle Configuration, Core Runtime, Logging, Inventory, and Doctor each went through) — this document tracks *what* to build next, not the design itself. Design happens in a new ADR under `System/docs/Architecture/` when a candidate is picked up.
+
+This is the **tactical** roadmap for one project. For the **strategic** six-stage path (Foundation → Digital Twin) this project is Stage 1 of, see the workspace root's [`ROADMAP.md`](../../../ROADMAP.md) — that document doesn't repeat anything below, and this one doesn't repeat anything there.
 
 ## Scope
 
