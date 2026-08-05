@@ -8,6 +8,7 @@ from heimei.core.runtime import ManagerState
 from heimei.doctor import DoctorService
 from heimei.inventory import InventoryService
 from heimei.logging import LoggingService
+from heimei.status import StatusService
 
 
 @pytest.fixture(autouse=True)
@@ -36,24 +37,24 @@ def test_application_registers_configuration_into_its_container():
     assert isinstance(app.services.get(ConfigurationService), ConfigurationService)
 
 
-def test_application_registers_logging_inventory_and_doctor_managers_with_the_runtime():
+def test_application_registers_logging_inventory_doctor_and_status_managers_with_the_runtime():
     app = Application()
 
     names = {record.name for record in app.runtime.managers}
-    assert names == {"logging", "inventory", "doctor"}
+    assert names == {"logging", "inventory", "doctor", "status"}
 
 
-def test_application_start_and_stop_succeed_with_all_three_managers():
+def test_application_start_and_stop_succeed_with_all_four_managers():
     app = Application()
 
     app.start()
     app.stop()
 
     names = {record.name for record in app.runtime.managers}
-    assert names == {"logging", "inventory", "doctor"}
+    assert names == {"logging", "inventory", "doctor", "status"}
 
 
-def test_application_start_orders_logging_and_inventory_before_doctor():
+def test_application_start_orders_logging_inventory_and_doctor_before_status():
     app = Application()
 
     app.start()
@@ -61,7 +62,8 @@ def test_application_start_orders_logging_and_inventory_before_doctor():
     records = {record.name: record for record in app.runtime.managers}
     assert records["logging"].order < records["doctor"].order
     assert records["inventory"].order < records["doctor"].order
-    for name in ("logging", "inventory", "doctor"):
+    assert records["doctor"].order < records["status"].order
+    for name in ("logging", "inventory", "doctor", "status"):
         assert records[name].state is ManagerState.STARTED
 
     app.stop()
@@ -94,6 +96,18 @@ def test_application_start_makes_doctor_service_resolvable():
     assert app.services.has(DoctorService) is True
     findings = app.services.get(DoctorService).run()
     assert len(findings) > 0
+    app.stop()
+
+
+def test_application_start_makes_status_service_resolvable():
+    app = Application()
+
+    app.start()
+
+    assert app.services.has(StatusService) is True
+    snapshot = app.services.get(StatusService).snapshot()
+    assert snapshot.runtime.manager_count == 4
+    assert snapshot.runtime.all_managers_started is True
     app.stop()
 
 
