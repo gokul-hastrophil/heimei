@@ -1,3 +1,5 @@
+from importlib.metadata import version as _package_version
+
 import typer
 from rich.console import Console
 
@@ -8,4 +10,4 @@ console = Console()
 @app.callback(invoke_without_command=True)
 def version():
     """Show Heimei version."""
-    console.print("[bold green]Heimei[/bold green] v0.2.0")
+    console.print(f"[bold green]Heimei[/bold green] v{_package_version('heimei')}")

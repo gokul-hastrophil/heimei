@@ -20,6 +20,35 @@ Current-state map of `Projects/Heimei` after Milestone M1: what the five impleme
 
 `Projects/Heimei`'s Python package (`src/heimei`) as of the M1 milestone (Configuration, Core Runtime, Logging, Inventory, Doctor — all implemented, tested, and frozen). Does not cover the still-empty stub packages (`agents/`, `backup/`, `bootstrap/`, `memory/`, `models/`, `services/`, `status/`, `ui/`, `update/`, `utils/`, `workflows/`) beyond noting where they'd eventually plug in — see `docs/ROADMAP.md`.
 
+## Project layout
+
+```text
+Projects/Heimei/
+├── src/heimei/
+│   ├── cli/          # Typer subcommands — one module per command, each exposes `app`
+│   ├── config/       # Configuration Manager (ADR-0008, frozen)
+│   ├── core/         # Core Runtime: Application, ServiceContainer, Runtime, Manager protocol (ADR-0011, frozen)
+│   ├── logging/      # Logging Manager (ADR-0012, frozen)
+│   ├── inventory/    # Inventory Manager (ADR-0013, frozen)
+│   ├── doctor/       # Doctor Manager (ADR-0014, frozen)
+│   ├── main.py       # heimei.main:app — the console-script entry point
+│   └── agents/, backup/, bootstrap/, memory/, models/, services/,
+│       status/, ui/, update/, utils/, workflows/
+│                     # reserved, not yet implemented — see docs/ROADMAP.md
+├── tests/            # one test_<package>_<component>.py per source module
+├── docs/             # this document, DEVELOPMENT.md, ROADMAP.md
+├── pyproject.toml, ruff.toml, uv.lock
+└── README.md, CHANGELOG.md, CONTRIBUTING.md, LICENSE
+
+System/
+├── docs/Architecture/  # every ADR — the actual decision record; a filename existing
+│                       # here does not mean the decision was made, check `Status:`
+├── manifest/           # machine.yaml, logging.yaml — read only via heimei.config
+└── docs/Templates/     # ADR_TEMPLATE.md
+```
+
+`Projects/Heimei` is the one real project in the wider `~/Heimei` workspace; root-level directories like `Agents/`, `Core/`, `Memory/`, `Models/` are that workspace's *data/config* storage locations, distinct from (and named to mirror) the code packages above — see `Knowledge/Documentation/Glossary.md` if working outside this project.
+
 ## Component diagram
 
 ```mermaid
@@ -138,6 +167,20 @@ Two details that are easy to miss reading the source in isolation:
 | `heimei.logging` | Structured logging, sink routing (console/file today) | Let anything outside `heimei.logging.sinks` touch `loguru` directly |
 | `heimei.inventory` | Read-only live machine state, layered hardware/tooling discovery | Change system state, reconcile configuration, judge health |
 | `heimei.doctor` | Evaluate Inventory snapshots into Findings via independent, composable checks | Query the OS directly, mutate anything |
+
+## CLI surface
+
+What each command actually touches — usage and sample output belong in `README.md`; this is the architecture-facing view (which service, if any, each command resolves from the `ServiceContainer`):
+
+| Command | Resolves from the container | Notes |
+|---|---|---|
+| `heimei version` | — | Reads package metadata directly (`importlib.metadata`), no `Application` dependency |
+| `heimei info` | — | Calls `platform.*` directly — does **not** go through `InventoryService` yet (see `docs/ROADMAP.md`) |
+| `heimei status` | — | Stub; prints a placeholder, doesn't resolve anything yet |
+| `heimei doctor` | `DoctorService` | The only command that exercises the full Runtime graph (Doctor → Inventory → Logging) |
+| `heimei config show/validate/dump` | — | Uses `heimei.config`'s standalone `get_configuration_service()` singleton directly, bypassing `Application`/`Runtime` entirely — this is why `config` works even though `Application.services` is never involved |
+
+Every command runs inside `main.py`'s top-level `@app.callback()`, so `Application()`/`.start()`/`.stop()` always run regardless of which command is invoked — `version`/`info`/`status`/`config` simply don't happen to use the result.
 
 ## Where this diagram will need to change next
 
