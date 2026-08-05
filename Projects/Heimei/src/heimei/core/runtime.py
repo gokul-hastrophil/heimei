@@ -68,13 +68,29 @@ class Runtime:
         order = self._resolve_order()
         context = RuntimeContext(services=self._container)
 
-        for name in order:
-            self._managers[name].initialize(context)
-            self._states[name] = ManagerState.INITIALIZED
+        started: list[str] = []
+        try:
+            for name in order:
+                self._managers[name].initialize(context)
+                self._states[name] = ManagerState.INITIALIZED
 
-        for name in order:
-            self._managers[name].startup()
-            self._states[name] = ManagerState.STARTED
+            for name in order:
+                self._managers[name].startup()
+                self._states[name] = ManagerState.STARTED
+                started.append(name)
+        except Exception:
+            # A partially activated Runtime must not be retryable: retrying
+            # startup() here would re-initialize managers that already
+            # initialized, and a manager that reached STARTED would never
+            # get shut down. Shut down what did start (reverse order) and
+            # move to a terminal SHUT_DOWN phase so a retry is rejected by
+            # the guard above instead of silently corrupting manager state.
+            self._order = order
+            self._phase = _Phase.SHUT_DOWN
+            for name in reversed(started):
+                self._managers[name].shutdown()
+                self._states[name] = ManagerState.SHUT_DOWN
+            raise
 
         self._order = order
         self._phase = _Phase.STARTED

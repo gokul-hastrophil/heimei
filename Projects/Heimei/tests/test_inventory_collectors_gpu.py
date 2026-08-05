@@ -8,11 +8,12 @@ from heimei.inventory.collectors import gpu
 
 
 class FakePynvmlModule(types.ModuleType):
-    def __init__(self, devices, fail_init=False, fail_count=False):
+    def __init__(self, devices, fail_init=False, fail_count=False, fail_shutdown=False):
         super().__init__("pynvml")
         self._devices = devices
         self._fail_init = fail_init
         self._fail_count = fail_count
+        self._fail_shutdown = fail_shutdown
         self.shutdown_called = False
 
     def nvmlInit(self):
@@ -35,6 +36,8 @@ class FakePynvmlModule(types.ModuleType):
 
     def nvmlShutdown(self):
         self.shutdown_called = True
+        if self._fail_shutdown:
+            raise RuntimeError("uninitialized")
 
 
 @pytest.fixture
@@ -93,6 +96,33 @@ def test_pynvml_not_installed_falls_through_to_nvidia_smi(monkeypatch, no_pynvml
     assert snapshot.source == "nvidia-smi"
     assert snapshot.devices[0].name == "RTX 3050"
     assert snapshot.devices[0].memory_total_bytes == 4096 * 1024 * 1024
+
+
+def test_nvidia_smi_unparsable_memory_keeps_device(monkeypatch, no_pynvml):
+    only_on_path(monkeypatch, "nvidia-smi")
+    fake_stdout(monkeypatch, "RTX 3050, [N/A]\n")
+
+    snapshot = gpu.collect()
+
+    assert snapshot.available is True
+    assert snapshot.devices[0].name == "RTX 3050"
+    assert snapshot.devices[0].memory_total_bytes is None
+
+
+def test_pynvml_shutdown_failure_does_not_lose_the_collected_devices(monkeypatch):
+    fake = install_fake_pynvml(
+        monkeypatch,
+        devices=[{"name": "RTX 3050", "memory": 4_294_967_296}],
+        fail_shutdown=True,
+    )
+    only_on_path(monkeypatch)
+
+    snapshot = gpu.collect()
+
+    assert snapshot.available is True
+    assert snapshot.source == "pynvml"
+    assert snapshot.devices[0].name == "RTX 3050"
+    assert fake.shutdown_called is True
 
 
 def test_pynvml_init_failure_falls_through_to_nvidia_smi(monkeypatch):

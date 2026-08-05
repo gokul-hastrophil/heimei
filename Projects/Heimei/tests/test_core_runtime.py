@@ -275,6 +275,49 @@ def test_shutdown_failure_propagates_and_stops_further_shutdown(container):
     assert ("a", "shutdown") not in log
 
 
+def test_startup_failure_shuts_down_already_started_managers_in_reverse_order(container):
+    log = []
+    runtime = Runtime(container)
+    runtime.register(FakeManager("a", call_log=log))
+    runtime.register(FakeManager("b", dependencies=("a",), call_log=log))
+    failing = FakeManager("c", dependencies=("b",), call_log=log)
+    failing.fail_on.add("startup")
+    runtime.register(failing)
+
+    with pytest.raises(RuntimeError, match="failed to start"):
+        runtime.startup()
+
+    shutdown_order = [name for name, phase in log if phase == "shutdown"]
+    assert shutdown_order == ["b", "a"]
+
+
+def test_retrying_startup_after_a_failure_raises_instead_of_reinitializing(container):
+    log = []
+    runtime = Runtime(container)
+    failing = FakeManager("a", call_log=log)
+    failing.fail_on.add("startup")
+    runtime.register(failing)
+
+    with pytest.raises(RuntimeError, match="failed to start"):
+        runtime.startup()
+
+    with pytest.raises(RuntimeStateError):
+        runtime.startup()
+
+
+def test_shutdown_after_a_failed_startup_raises(container):
+    runtime = Runtime(container)
+    failing = FakeManager("a")
+    failing.fail_on.add("startup")
+    runtime.register(failing)
+
+    with pytest.raises(RuntimeError, match="failed to start"):
+        runtime.startup()
+
+    with pytest.raises(RuntimeStateError):
+        runtime.shutdown()
+
+
 def test_managers_view_is_an_immutable_tuple(container):
     runtime = Runtime(container)
     runtime.register(FakeManager("a"))

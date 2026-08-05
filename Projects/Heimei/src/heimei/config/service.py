@@ -44,11 +44,13 @@ class ConfigurationService:
         """Return ``<manifest_dir>/<name>.yaml`` validated as ``model``.
 
         Cached per manifest name. Pass ``force=True`` to bypass the cache
-        and re-read from disk (e.g. for ``heimei config validate``).
+        and re-read from disk (e.g. for ``heimei config validate``). Each
+        call returns an independent deep copy, so a caller mutating its
+        result can never corrupt the cached instance.
         """
         cached = self._cache.get(name)
         if not force and isinstance(cached, model):
-            return cached
+            return cached.model_copy(deep=True)
 
         path = self._manifest_dir / f"{name}.yaml"
         raw = load_manifest(path)
@@ -58,7 +60,7 @@ class ConfigurationService:
             raise ManifestValidationError(path, exc.errors()) from exc
 
         self._cache[name] = validated
-        return validated
+        return validated.model_copy(deep=True)
 
 
 _service: ConfigurationService | None = None

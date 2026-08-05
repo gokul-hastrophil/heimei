@@ -1,3 +1,4 @@
+import contextlib
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -32,7 +33,8 @@ def _version_via_engine_api() -> str | None:
     except Exception:
         return None
     finally:
-        client.close()
+        with contextlib.suppress(Exception):
+            client.close()
 
 
 def _version_via_cli() -> str | None:

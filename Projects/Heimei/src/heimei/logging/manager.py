@@ -6,7 +6,7 @@ from heimei.core.context import RuntimeContext
 from heimei.core.health import HealthState, HealthStatus
 from heimei.logging.manifest import LoggingManifest
 from heimei.logging.service import LoggingService
-from heimei.logging.sinks import remove_sink
+from heimei.logging.sinks import clear_sinks, remove_sink
 from heimei.logging.sinks.console import add_console_sink
 from heimei.logging.sinks.file import add_file_sink
 
@@ -46,6 +46,7 @@ class LoggingManager:
         config = context.services.get(ConfigurationService)
         self._manifest = config.get("logging", LoggingManifest)
 
+        clear_sinks()
         if self._manifest.console:
             self._console_sink_id = add_console_sink(level=self._manifest.level)
 

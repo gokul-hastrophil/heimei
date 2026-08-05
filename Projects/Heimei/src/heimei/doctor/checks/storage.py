@@ -55,7 +55,7 @@ class StorageCheck:
                 message = f"Disk usage critical on {mount.path} ({free_percent:.1f}% free)"
             elif free_percent < self.WARNING_FREE_PERCENT:
                 severity = Severity.WARNING
-                message = "Disk usage high"
+                message = f"Disk usage high on {mount.path} ({free_percent:.1f}% free)"
             else:
                 severity = Severity.OK
                 message = f"{mount.path}: {free_percent:.1f}% free"

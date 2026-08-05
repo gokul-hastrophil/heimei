@@ -8,14 +8,28 @@ def service():
     return InventoryService()
 
 
-@pytest.mark.parametrize("method_name", ["machine", "cpu", "python"])
-def test_non_volatile_methods_cache_after_first_call(service, monkeypatch, method_name):
+def _stub_collector(monkeypatch, method_name):
+    """Replace a collector with a side-effect-free stub. The service only
+    ever checks the cached value for identity/None-ness, so a fresh
+    sentinel per call is enough to test caching without running any real
+    (and possibly slow, host-dependent) collection logic.
+    """
     import heimei.inventory.collectors as collectors_pkg
 
     collector = getattr(collectors_pkg, method_name)
     calls = []
-    original_collect = collector.collect
-    monkeypatch.setattr(collector, "collect", lambda: calls.append(1) or original_collect())
+
+    def stub():
+        calls.append(1)
+        return object()
+
+    monkeypatch.setattr(collector, "collect", stub)
+    return calls
+
+
+@pytest.mark.parametrize("method_name", ["machine", "cpu", "python"])
+def test_non_volatile_methods_cache_after_first_call(service, monkeypatch, method_name):
+    calls = _stub_collector(monkeypatch, method_name)
 
     first = getattr(service, method_name)()
     second = getattr(service, method_name)()
@@ -32,12 +46,7 @@ def test_non_volatile_methods_accept_no_refresh_kwarg(service, method_name):
 
 @pytest.mark.parametrize("method_name", ["memory", "storage", "network", "gpu", "docker"])
 def test_volatile_methods_cache_by_default(service, monkeypatch, method_name):
-    import heimei.inventory.collectors as collectors_pkg
-
-    collector = getattr(collectors_pkg, method_name)
-    calls = []
-    original_collect = collector.collect
-    monkeypatch.setattr(collector, "collect", lambda: calls.append(1) or original_collect())
+    calls = _stub_collector(monkeypatch, method_name)
 
     first = getattr(service, method_name)()
     second = getattr(service, method_name)()
@@ -48,12 +57,7 @@ def test_volatile_methods_cache_by_default(service, monkeypatch, method_name):
 
 @pytest.mark.parametrize("method_name", ["memory", "storage", "network", "gpu", "docker"])
 def test_volatile_methods_refresh_bypasses_the_cache(service, monkeypatch, method_name):
-    import heimei.inventory.collectors as collectors_pkg
-
-    collector = getattr(collectors_pkg, method_name)
-    calls = []
-    original_collect = collector.collect
-    monkeypatch.setattr(collector, "collect", lambda: calls.append(1) or original_collect())
+    calls = _stub_collector(monkeypatch, method_name)
 
     getattr(service, method_name)()
     getattr(service, method_name)(refresh=True)

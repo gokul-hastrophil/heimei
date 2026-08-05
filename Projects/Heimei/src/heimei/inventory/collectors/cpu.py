@@ -19,7 +19,10 @@ class CpuSnapshot(InventoryRecord):
 
 
 def collect() -> CpuSnapshot:
-    frequency = psutil.cpu_freq()
+    try:
+        frequency = psutil.cpu_freq()
+    except NotImplementedError:
+        frequency = None
     return CpuSnapshot(
         collected_at=datetime.now(UTC),
         source="psutil",

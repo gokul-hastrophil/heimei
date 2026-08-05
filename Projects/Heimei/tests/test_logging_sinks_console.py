@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 from loguru import logger
 
@@ -40,6 +42,12 @@ def test_console_sink_respects_level_filter(capsys):
 
 
 def test_console_sink_removes_loguru_default_sink_to_avoid_duplicate_output(capsys):
+    # Installs a stand-in for loguru's own default stderr sink so this test
+    # actually exercises the removal in add_console_sink() — without it,
+    # the autouse clean_loguru fixture already leaves nothing to remove and
+    # this would pass even if the removal call were deleted.
+    logger.add(sys.stderr, format="{message}")
+
     add_console_sink(level="INFO")
 
     logger.info("only once")

@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 from loguru import logger
 
@@ -122,6 +124,25 @@ def test_shutdown_is_safe_to_call_after_only_initialize(container):
 def test_console_disabled_via_manifest_skips_console_sink(
     manifest_dir, log_dir, write_logging_manifest, capsys
 ):
+    container = _container_with_logging_manifest(
+        manifest_dir,
+        write_logging_manifest,
+        {"level": "INFO", "console": False, "file": True, "directory": str(log_dir)},
+    )
+    manager = LoggingManager()
+
+    manager.initialize(RuntimeContext(services=container))
+    manager.service.info("should not print")
+
+    assert capsys.readouterr().err == ""
+
+
+def test_console_disabled_removes_any_pre_existing_default_sink(
+    manifest_dir, log_dir, write_logging_manifest, capsys
+):
+    # Simulates loguru's own default stderr sink, present before any Heimei
+    # code has run. Without clear_sinks(), console: false never removes it.
+    logger.add(sys.stderr, format="{message}")
     container = _container_with_logging_manifest(
         manifest_dir,
         write_logging_manifest,

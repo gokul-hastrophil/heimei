@@ -56,7 +56,8 @@ def test_low_free_space_is_warning():
     (finding,) = check.run(FakeInventory([_mount("/", 90.0)]))
 
     assert finding.severity is Severity.WARNING
-    assert finding.message == "Disk usage high"
+    assert "/" in finding.message
+    assert "10.0" in finding.message
 
 
 def test_critically_low_free_space_is_critical():

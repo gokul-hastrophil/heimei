@@ -49,7 +49,21 @@ def test_get_is_cached(manifest_dir, valid_machine_manifest, write_machine_manif
     (manifest_dir / "machine.yaml").unlink()
     second = service.get("machine", MachineManifest)
 
-    assert first is second
+    assert first == second
+
+
+def test_get_returns_independent_copies_so_mutation_cannot_poison_the_cache(
+    manifest_dir, valid_machine_manifest, write_machine_manifest
+):
+    write_machine_manifest(manifest_dir, valid_machine_manifest)
+    service = ConfigurationService(manifest_dir=manifest_dir)
+
+    first = service.get("machine", MachineManifest)
+    first.hostname = "mutated"
+
+    second = service.get("machine", MachineManifest)
+
+    assert second.hostname == valid_machine_manifest["hostname"]
 
 
 def test_force_bypasses_cache(manifest_dir, valid_machine_manifest, write_machine_manifest):

@@ -14,3 +14,14 @@ from loguru import logger as _loguru_logger
 def remove_sink(sink_id: int) -> None:
     """Detach a previously-added sink by id."""
     _loguru_logger.remove(sink_id)
+
+
+def clear_sinks() -> None:
+    """Detach every sink, including loguru's own default stderr sink.
+
+    LoggingManager calls this unconditionally before wiring up whatever
+    sinks the manifest enables, so a manifest with every sink disabled
+    produces no output instead of leaking through loguru's default
+    handler.
+    """
+    _loguru_logger.remove()

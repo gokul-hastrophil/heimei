@@ -1,3 +1,4 @@
+import contextlib
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -51,7 +52,8 @@ def _via_pynvml() -> tuple[GpuDevice, ...] | None:
     except Exception:
         return None
     finally:
-        pynvml.nvmlShutdown()
+        with contextlib.suppress(Exception):
+            pynvml.nvmlShutdown()
 
 
 def _via_nvidia_smi() -> tuple[GpuDevice, ...] | None:

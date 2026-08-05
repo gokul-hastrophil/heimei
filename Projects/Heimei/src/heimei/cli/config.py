@@ -43,9 +43,9 @@ def show() -> None:
 
 @app.command()
 def validate() -> None:
-    """Validate all configuration manifests."""
+    """Validate the machine manifest."""
     _, manifest_dir = _fresh_machine()
-    console.print(f"[bold green]Configuration is valid[/bold green] ({manifest_dir})")
+    console.print(f"[bold green]machine manifest is valid[/bold green] ({manifest_dir})")
 
 
 @app.command()
@@ -62,4 +62,4 @@ def dump(
     if fmt == "json":
         console.print_json(data=data)
     else:
-        console.print(yaml.safe_dump(data, sort_keys=False), end="")
+        console.print(yaml.safe_dump(data, sort_keys=False), end="", markup=False)
