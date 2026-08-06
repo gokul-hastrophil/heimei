@@ -1,0 +1,134 @@
+name: Feature
+description: A new, additive capability inside an already-approved architecture (a new check, a new CLI command, a new collector, etc.).
+title: "[Feature]: "
+labels:
+  - "type:feature"
+  - "status:needs-approval"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a change to a frozen subsystem's existing behavior, or a brand-new subsystem, use the Architecture Proposal form instead — this form is for additive work inside an already-decided design. See `PROJECT.md` for the current frozen-subsystem list.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What's missing or awkward today that this feature addresses?
+    validations:
+      required: true
+
+  - type: textarea
+    id: desired-outcome
+    attributes:
+      label: Desired outcome
+      description: What can a user or another subsystem do after this exists that they can't today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: why-heimei
+    attributes:
+      label: Why this belongs in Heimei
+      description: How does this serve VISION.md, and which existing ADR's design does it extend without changing?
+    validations:
+      required: true
+
+  - type: input
+    id: relevant-adr
+    attributes:
+      label: Relevant ADR
+      description: The ADR governing the subsystem this feature extends.
+      placeholder: e.g. ADR-0013 (Inventory)
+    validations:
+      required: true
+
+  - type: textarea
+    id: allowed-scope
+    attributes:
+      label: Allowed scope
+      description: Exactly which new files may be added and which existing files may be edited.
+    validations:
+      required: true
+
+  - type: textarea
+    id: forbidden-scope
+    attributes:
+      label: Forbidden scope
+      description: Which existing public APIs, frozen files, or unrelated subsystems must not change.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: The specific, checkable conditions for "done."
+    validations:
+      required: true
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: Tests
+      description: What new test file(s) will cover this, following the repo's test-per-module convention?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: documentation-impact
+    attributes:
+      label: Documentation impact
+      description: Select all that apply.
+      multiple: true
+      options:
+        - Projects/Heimei/README.md (CLI reference)
+        - Projects/Heimei/docs/ARCHITECTURE.md
+        - Projects/Heimei/docs/ROADMAP.md
+        - Projects/Heimei/CHANGELOG.md
+        - None
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frozen-subsystem-impact
+    attributes:
+      label: Frozen-subsystem impact
+      description: Does this change any existing frozen subsystem's public behavior (not just add something new alongside it)?
+      options:
+        - "No — purely additive, or confined to a non-frozen area (e.g. heimei.cli)"
+        - "Yes — stop; this needs an Architecture Proposal issue instead, with separate approval"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: dependency-impact
+    attributes:
+      label: Dependency impact
+      description: Does this add or change a Python dependency?
+      options:
+        - "None"
+        - "New Python dependency — named in Allowed scope above"
+    validations:
+      required: true
+
+  - type: textarea
+    id: security-privacy-impact
+    attributes:
+      label: Security / privacy impact
+      description: Any credentials, secrets, PII, or new attack surface? "None" is a valid, expected answer.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: approval-requirements
+    attributes:
+      label: Approval requirements (self-certified by whoever files this issue)
+      description: This issue cannot receive status:approved unless every box is true.
+      options:
+        - label: This does not change any frozen subsystem's existing public behavior
+          required: true
+        - label: This does not modify VISION.md or CONSTITUTION.md
+          required: true
+        - label: This does not add a paid service, a new API key, or expose a credential
+          required: true
