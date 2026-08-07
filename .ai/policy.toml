@@ -1,0 +1,126 @@
+# .ai/policy.toml
+#
+# Machine-readable policy for the Heimei AI development control plane.
+# Every approval, dispatch, and review operation reads this file and
+# fails closed if it is missing, malformed, or disagrees with what it
+# observes on GitHub. See AI_WORKFLOW.md for the policy this encodes
+# and State/Reports/ai-development-control-plane.md for the full
+# design rationale.
+#
+# Contains no credentials. Nothing in this file is a secret — it is
+# safe to read, log, and commit in full.
+
+[repository]
+# Discovered via `gh repo view --json id,nameWithOwner` on 2026-08-07.
+# A mismatch here is treated as a policy violation (wrong repo, or a
+# repository rename/transfer that needs a deliberate policy update),
+# not something any script silently adapts to.
+owner = "gokul-hastrophil"
+name = "heimei"
+id = "R_kgDOTrfRlg"
+
+[approval]
+# Only these GitHub logins may create a trusted approval record via
+# Scripts/ai/approve.sh. ChatGPT standing delegation is explicitly not
+# implemented in v1 — see AI_WORKFLOW.md, "Open Questions."
+allowed_approvers = ["gokul-hastrophil"]
+
+[branch]
+protected = "main"
+# Every automation-created branch must start with this prefix, use
+# only normalized safe components after it, and pass
+# `git check-ref-format --branch`.
+automation_prefix = "ai/"
+
+[agents]
+allowed = ["claude", "codex"]
+
+[paths]
+# Hard-denied for ordinary issue approval, regardless of what an
+# issue's own "Allowed paths" section claims. Changing any of these
+# requires a dedicated architecture-approval record, not an ordinary
+# feature/bug approval — see AI_WORKFLOW.md.
+protected_documents = [
+  "VISION.md",
+  "CONSTITUTION.md",
+]
+protected_control_plane = [
+  ".ai/",
+  "Scripts/ai/",
+  ".github/workflows/",
+  ".github/ISSUE_TEMPLATE/",
+  ".github/PULL_REQUEST_TEMPLATE.md",
+]
+# Frozen per PROJECT.md's frozen-subsystem table. Kept here too,
+# machine-readably, so path enforcement doesn't have to parse Markdown
+# to find them — PROJECT.md remains the authoritative human-readable
+# record; this list must be kept in sync with it by hand.
+frozen_subsystems = [
+  "Projects/Heimei/src/heimei/config/",
+  "Projects/Heimei/src/heimei/core/",
+  "Projects/Heimei/src/heimei/logging/",
+  "Projects/Heimei/src/heimei/inventory/",
+  "Projects/Heimei/src/heimei/doctor/",
+  "Projects/Heimei/src/heimei/status/",
+]
+# Dependency manifests and migration paths are hard-denied for
+# ordinary automated dispatch in v1, regardless of an issue's own
+# "Allowed paths" list or prose — see AI_WORKFLOW.md, "Risk and
+# dependency enforcement." A dependency bump or a migration always
+# needs a dedicated, separately-approved change, never bundled into
+# an ordinary feature/bug dispatch. Matched structurally by
+# ai_path_is_dependency_manifest()/ai_path_is_migration() in
+# common.sh, not by this list alone (these two are documentation of
+# intent; the matching logic itself is code, not data, because glob
+# patterns can't easily express "any requirements*.txt at any depth").
+dependency_manifests_note = "see ai_path_is_dependency_manifest() in Scripts/ai/common.sh"
+migration_paths_note = "see ai_path_is_migration() in Scripts/ai/common.sh"
+
+[claim]
+# The atomic claim operation (see AI_WORKFLOW.md, "Atomic claim") uses
+# GitHub's create-reference API to create a ref under this prefix,
+# never a plain push to the eventual ai/* implementation branch. A 422
+# from the API (ref already exists) means an issue+approval-id has
+# already been claimed — by this run or another — and is treated as a
+# hard failure, never retried as if it were success.
+ref_prefix = "refs/heads/ai-claims/"
+
+[isolation]
+# Automated Codex review requires a verified, empirically-tested
+# network-isolation backend (see ai_verify_network_isolation() in
+# common.sh) — not merely "the sandbox flag exists." As documented in
+# AI_WORKFLOW.md, this is enforced but does not currently unlock
+# automated Codex review in practice: Codex's own model calls need
+# network access, which a genuinely network-isolated sandbox cannot
+# provide, so v1 always falls back to generating a sanitized review
+# bundle and the exact manual `codex exec` command instead of ever
+# auto-invoking Codex as a reviewer. This is a deliberate v1 position,
+# not an unfinished feature.
+backend = "bubblewrap"
+
+[runtime]
+# Both relative to the repository root. Already covered by the root
+# .gitignore's Temp/ rule — nothing here needs a new ignore entry.
+worktree_root = "Temp/ai-worktrees"
+run_log_root = "Temp/ai-runs"
+# Dispatcher-owned run manifests (see AI_WORKFLOW.md, "Registered
+# dispatch worktree verification") — verify.sh's --mode dispatch
+# refuses to accept any manifest outside this root.
+run_manifest_root = "Temp/ai-runs/manifests"
+
+# Wall-clock bound per agent invocation, mechanically enforced via
+# `timeout --kill-after`.
+max_runtime_seconds = 1200
+
+# "Turns" here means dispatch-level invocations of the agent CLI (one
+# -p/exec call = one turn), not internal tool-call steps inside that
+# call — neither the installed claude nor codex CLI exposes a flag to
+# bound the latter (confirmed by inspecting --help; see
+# State/Reports/ai-development-control-plane.md). This value is
+# enforced by dispatch.sh's own retry loop, not by either CLI.
+max_turns = 1
+max_correction_attempts = 2
+
+# review.sh enforces this itself; not currently multi-round in v1
+# (automatic correction loops are explicitly deferred).
+max_review_rounds = 1

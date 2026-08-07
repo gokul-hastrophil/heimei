@@ -26,7 +26,7 @@ Configuration (ADR-0008), Core Runtime (ADR-0011), Logging (ADR-0012), Inventory
 
 **Suggested version for this milestone: `0.2.0`.** Rationale in the review linked above — still pre-1.0 (most planned subsystems are empty stubs, no CI yet), but a real MINOR bump over the 0.1.0 scaffold. Applying it means fixing the `pyproject.toml` / `cli/version.py` drift (below) in the same change, not just editing one number.
 
-## Milestone M2 — candidate: small fixes + Status subsystem
+## Milestone M2 — candidate: small fixes
 
 Small, low-risk items surfaced by the M1 review, roughly ordered by how self-contained they are:
 
@@ -38,7 +38,7 @@ Small, low-risk items surfaced by the M1 review, roughly ordered by how self-con
 6. **Fix the one remaining `mypy` gap.** `tests/test_cli_main.py:10` needs a type annotation on `FakeApplication.instances`. Trivial, just needs picking up.
 7. **Delete dead scaffold code.** `src/heimei/__init__.py`'s leftover `main()` ("Hello from heimei!") is never called — the real entry point is `main.py:app`. Decide whether `__main__.py` should do something (`python -m heimei`) or stay retired.
 
-**Status subsystem** — the most natural sixth subsystem, and the smallest: `cli/status.py` already exists as a stub ("Status subsystem is under development"). Unlike Inventory/Doctor, Status wouldn't need any new OS interaction — it would compose what Logging/Inventory/Doctor already expose (`Runtime.managers` health, a Doctor run, an Inventory summary) into one human-readable view. Whether it's a real `Manager` or a thin CLI-only composition over existing services is a design question for its own ADR proposal, not decided here.
+**Status** is no longer a candidate here — it shipped as the sixth subsystem (ADR-0015, Accepted and frozen; see `PROJECT.md`'s frozen-subsystem table). `heimei status` is real.
 
 ## Milestone M3 — future, needs design work first
 
@@ -61,11 +61,10 @@ Not new findings — carried forward from ADR "Future Work" sections so they don
 ## Next Actions
 
 - Pick the first M2 item(s) to actually schedule.
-- Open a new ADR when Status (or anything else in M2/M3) is ready to move from "candidate" to "proposed."
+- Open a new ADR when anything in M2/M3 is ready to move from "candidate" to "proposed."
 
 ## Open Questions
 
-- Does Status become a real `Manager` (with its own lifecycle) or a CLI-only composition over the three existing services? Affects whether it needs a `dependencies` tuple at all.
 - Should the `heimei.core` → subsystem-managers import direction (Application importing every manager) be fixed by moving `Application` into `heimei.bootstrap`, or left as-is since the workaround (deferred imports) is already proven to work?
 
 ## Related Documents

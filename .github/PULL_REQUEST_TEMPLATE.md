@@ -1,13 +1,44 @@
 <!--
 Every section below is required — see AI_WORKFLOW.md, "PR lifecycle."
-A PR missing any section is incomplete regardless of CI status.
-Open this PR as a draft. Do not mark it "ready for review" yourself —
-that is Gokul's action, taken during owner review.
+A PR missing any section, or with a placeholder-only answer in a
+section that isn't legitimately "None", is incomplete regardless of
+CI status. Open this PR as a draft, labeled status:draft-pr — not
+status:review, which is applied only after CI is confirmed green, as
+a separate trusted operation. Do not mark it "ready for review"
+yourself — that is Gokul's action, taken during owner review.
+
+If this PR was opened by Scripts/ai/dispatch.sh, every field in
+Provenance below was generated from a trusted approval record and
+dispatch attestation, not typed by hand — do not edit them.
 -->
 
 ## Linked issue
 
 Closes #
+
+## Provenance
+
+<!-- Filled in automatically by Scripts/ai/dispatch.sh for an
+automated PR. For a human-authored PR, leave these blank or mark N/A —
+they only apply to the trusted-approval workflow in AI_WORKFLOW.md. -->
+
+| Field | Value |
+|---|---|
+| Approval ID | |
+| Approval comment | |
+| Claim ref | |
+| Run ID | |
+| Repository ID | |
+| Implementation agent | |
+| Base SHA | |
+| Tested commit SHA | |
+| Remote branch SHA | |
+
+<!-- Review is a separate, explicit, owner-invoked step —
+Scripts/ai/review.sh PR --issue N --approval-id ID
+  --implementation-agent A --reviewer B
+Nothing here auto-selects a reviewer; there is no "Review agent"
+provenance field because review never runs as part of dispatch. -->
 
 ## Architecture summary
 
@@ -36,16 +67,15 @@ implements or extends, if any. -->
 <!-- Paste the ACTUAL command and its ACTUAL output — a restated summary
 ("tests pass") is not evidence. See AI_WORKFLOW.md, "Evidence requirements." -->
 
-```
+```console
 $ uv run pytest
-
-
 $ uv run ruff check .
-
-
 $ uv run mypy src/heimei
-
 ```
+
+<!-- Replace the three command lines above with their ACTUAL captured
+output once you've run them — the fence above is a format example,
+not a substitute for a real transcript. -->
 
 ## Frozen-subsystem touches
 
@@ -76,16 +106,6 @@ this change to take effect? "None" is a valid, expected answer. -->
 ## Known limitations
 
 <!-- Anything a reviewer should know that isn't a blocking problem. -->
-
-## Implementation agent
-
-<!-- claude / codex / human -->
-
-## Review agent
-
-<!-- The other agent from Implementation agent above — see
-AI_WORKFLOW.md, "one agent per implementation branch." Attach
-Scripts/ai/review.sh output, or state it's pending. -->
 
 ## Merge recommendation
 

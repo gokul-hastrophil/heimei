@@ -6,6 +6,8 @@ references:
   - Projects/Heimei/docs/ROADMAP.md
   - ROADMAP.md
   - State/Reports/m1-completion-review.md
+  - AI_WORKFLOW.md
+  - State/Reports/ai-development-control-plane.md
 ---
 
 # Heimei — Current Project State
@@ -20,7 +22,7 @@ The whole `~/Heimei` workspace. `Projects/Heimei/docs/ROADMAP.md` covers that on
 
 ## Current milestone
 
-**Milestone M1 — done.** Tagged `v0.2.0`. Five subsystems (Configuration, Core Runtime, Logging, Inventory, Doctor) implemented, tested (251 tests), documented, and frozen — see the table below. `Projects/Heimei`'s own `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `docs/DEVELOPMENT.md`, `docs/ARCHITECTURE.md`, and `docs/ROADMAP.md` were filled in as part of closing this milestone. Full review: `State/Reports/m1-completion-review.md`.
+**Milestone M1 — done.** Tagged `v0.2.0`. Six subsystems (Configuration, Core Runtime, Logging, Inventory, Doctor, Status) implemented, tested (287 tests as of this review), documented, and frozen — see the table below. `Projects/Heimei`'s own `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `docs/DEVELOPMENT.md`, `docs/ARCHITECTURE.md`, and `docs/ROADMAP.md` were filled in as part of closing this milestone. Full review: `State/Reports/m1-completion-review.md`.
 
 ## Frozen subsystems
 
@@ -31,16 +33,17 @@ The whole `~/Heimei` workspace. `Projects/Heimei/docs/ROADMAP.md` covers that on
 | Logging | [0012](System/docs/Architecture/0012-logging-manager.md) | Accepted, frozen |
 | Inventory | [0013](System/docs/Architecture/0013-inventory-manager.md) | Accepted, frozen |
 | Doctor | [0014](System/docs/Architecture/0014-doctor-manager.md) | Accepted, frozen |
+| Status | [0015](System/docs/Architecture/0015-status-manager.md) | Accepted, frozen |
 
-Frozen means: don't change their behavior without a new proposal and explicit approval first, per `CONSTITUTION.md`. `heimei.cli`, `heimei.main`, and `pyproject.toml`/version metadata are *not* frozen in this sense — they're wiring/release mechanics, not one of the five ADR-governed subsystems.
+Frozen means: don't change their behavior without a new proposal and explicit approval first, per `CONSTITUTION.md`. `heimei.cli`, `heimei.main`, and `pyproject.toml`/version metadata are *not* frozen in this sense — they're wiring/release mechanics, not one of the six ADR-governed subsystems.
 
 ## Not yet started
 
-Everything else under `Projects/Heimei/src/heimei/` (`agents`, `backup`, `bootstrap`, `memory`, `models`, `services`, `status`, `ui`, `update`, `utils`, `workflows`) is a reserved, empty package — no design work has happened, no ADR exists yet. `heimei status`/`heimei doctor`/`heimei info` are the only CLI commands with real behavior beyond `version`; `heimei status` is still a placeholder. ADRs `0001`–`0007`, `0009`, `0010` are unfilled templates — filenames only, no decision recorded.
+Everything else under `Projects/Heimei/src/heimei/` (`agents`, `backup`, `bootstrap`, `memory`, `models`, `services`, `ui`, `update`, `utils`, `workflows`) is a reserved, empty package — no design work has happened, no ADR exists yet. `heimei doctor`/`heimei status`/`heimei info` are the CLI commands with real behavior beyond `version`; `heimei config show/validate/dump` also has real behavior. ADRs `0001`–`0007`, `0009`, `0010` are unfilled templates — filenames only, no decision recorded.
 
 ## Active work
 
-This governance document set (`VISION.md`, `CONSTITUTION.md`, `CLAUDE.md`, this file, `ROADMAP.md`, `MEMORY_RULES.md`) — establishing the long-term mission and operating rules at the workspace root, distinct from `Projects/Heimei`'s own project-level docs. Being written on `docs/heimei-constitution`, not yet merged.
+Hardening the AI development control plane (`AI_WORKFLOW.md`, `AGENTS.md`, `.ai/policy.toml`, `Scripts/ai/`) after an adversarial security review found several core claims were not mechanically enforced — see `State/Reports/ai-development-control-plane.md` for the revised design (trusted approval records, exact-commit verification, restricted agent authority) and what remains manual (no branch protection configured on `main` yet; no CI-driven `status:review` transition).
 
 ## Immediate roadmap
 
@@ -61,4 +64,6 @@ This governance document set (`VISION.md`, `CONSTITUTION.md`, `CLAUDE.md`, this 
 - `ROADMAP.md` — the strategic six-stage path this milestone is step one of
 - `Projects/Heimei/docs/ROADMAP.md` — the tactical backlog for the one real software project
 - `State/Reports/m1-completion-review.md` — the full M1 audit this summary is drawn from
+- `AI_WORKFLOW.md` — the control-plane policy governing how further work on this project gets authorized and dispatched
+- `State/Reports/ai-development-control-plane.md` — the control plane's own architecture and current gaps
 - `CONSTITUTION.md` — what "frozen" obligates

@@ -47,7 +47,21 @@ body:
     id: allowed-scope
     attributes:
       label: Allowed scope
-      description: Exactly which new files may be added and which existing files may be edited.
+      description: Exactly which new files may be added and which existing files may be edited, in prose — context for a human reviewer. The "Allowed paths" field below is the machine-enforced version of this.
+    validations:
+      required: true
+
+  - type: textarea
+    id: allowed-paths
+    attributes:
+      label: Allowed paths
+      description: |
+        Machine-readable. One exact repository-relative path or approved glob per line — this is what Scripts/ai/approve.sh and Scripts/ai/dispatch.sh actually validate every changed file against, not the prose field above.
+        Rejected outright: vague values ("as needed", "relevant files", "entire repository"), bare `*` or `/**`, absolute paths, paths containing `..`, control characters, or empty lines.
+        A path under VISION.md, CONSTITUTION.md, .ai/, Scripts/ai/, .github/workflows/, or any frozen subsystem (see PROJECT.md) is hard-denied regardless of what you list here.
+      placeholder: |
+        Projects/Heimei/src/heimei/cli/status.py
+        Projects/Heimei/tests/test_cli_status.py
     validations:
       required: true
 

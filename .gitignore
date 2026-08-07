@@ -184,3 +184,10 @@ lmstudio/
 *.tmp
 *.cache
 *.lock
+# Except uv's own dependency lockfile, which Knowledge/Documentation/
+# Standards.md explicitly requires to be committed ("uv, with uv.lock
+# committed") and which .github/workflows/ci.yml's `uv sync --locked`
+# step depends on existing in a fresh checkout. Found uncommitted by
+# this generic *.lock rule while wiring up CI — see
+# State/Reports/ai-development-control-plane.md for the full note.
+!Projects/Heimei/uv.lock

@@ -1,0 +1,78 @@
+name: CI
+
+# Deterministic quality gate for Projects/Heimei — see AI_WORKFLOW.md.
+# Runs the exact same four commands Scripts/ai/verify.sh runs locally,
+# on GitHub's own infrastructure, so a human never has to trust an
+# agent's (or anyone's) self-report of "tests pass." Before this file
+# existed, "CI" in AI_WORKFLOW.md's pipeline diagram was aspirational —
+# see State/Reports/ai-development-control-plane.md, "What remains
+# manual," for that history.
+#
+# No secrets are used or required. No paid service is invoked — only
+# the public runner, pinned actions, and this repo's own `uv`/Python
+# tooling.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: this workflow only ever reads the repository and
+# reports a status check. It never needs to write anything.
+permissions:
+  contents: read
+
+# A new push to the same PR/branch supersedes any run already in
+# progress for it, instead of queuing redundant work.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: pytest / ruff / mypy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Projects/Heimei
+    # HEIMEI_HOME must point at the checkout, not the default ~/Heimei
+    # (heimei.config.settings.ConfigPaths.home defaults to
+    # Path.home()/"Heimei" — correct for the developer machine, where
+    # the repo genuinely lives at ~/Heimei, but wrong on a GitHub
+    # Actions runner: the repo is checked out under $GITHUB_WORKSPACE
+    # while $HOME is /home/runner, so the default would silently look
+    # for System/manifest/logging.yaml under /home/runner/Heimei
+    # instead of the checked-out manifest. NO_COLOR/FORCE_COLOR/TERM
+    # match verify.sh's own deterministic-color environment (Rich
+    # emits ANSI codes under FORCE_COLOR regardless of TTY detection,
+    # which breaks CLI tests asserting on plain substrings).
+    env:
+      HEIMEI_HOME: ${{ github.workspace }}
+      NO_COLOR: "1"
+      FORCE_COLOR: "0"
+      TERM: dumb
+    steps:
+      # actions/checkout v7.0.1, pinned by commit SHA per this repo's
+      # policy (.ai/policy.toml is checked in-tree by uv sync --locked
+      # below, not by this comment — the SHA itself is what's trusted).
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # astral-sh/setup-uv v9.0.0, pinned by commit SHA.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies (locked)
+        run: uv sync --locked
+
+      - name: pytest
+        run: uv run pytest -q
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: mypy
+        run: uv run mypy src/heimei
