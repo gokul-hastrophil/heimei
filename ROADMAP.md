@@ -18,7 +18,7 @@ The strategic path from today's CLI toward `VISION.md`'s Digital Twin, in six st
 
 The full six-stage arc. Status markers below reflect what's actually built, checked against `PROJECT.md` — this document states the destination, not a promise about timing.
 
-## Stage 1 — Engineering Platform *(in progress)*
+## Stage 1 — Engineering Platform *(done)*
 
 The infrastructure everything later depends on.
 
@@ -27,7 +27,7 @@ The infrastructure everything later depends on.
 - ✅ Logging
 - ✅ Inventory
 - ✅ Doctor
-- ⬜ Status — CLI command exists as a placeholder only; no design work started
+- ✅ Status
 
 See `Projects/Heimei/docs/ROADMAP.md` for what's actually next inside this stage.
 

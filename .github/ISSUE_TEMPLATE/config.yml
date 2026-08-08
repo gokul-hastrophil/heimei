@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Read AI_WORKFLOW.md first
+    url: https://github.com/gokul-hastrophil/heimei/blob/main/AI_WORKFLOW.md
+    about: Every issue must use one of the forms above and satisfy its approval requirements before it can carry status:approved. Blank issues are disabled deliberately — see AI_WORKFLOW.md for why.

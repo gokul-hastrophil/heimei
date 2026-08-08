@@ -1,0 +1,146 @@
+name: Bug
+description: Something behaves incorrectly relative to its own ADR, docstring, or tests.
+title: "[Bug]: "
+labels:
+  - "type:bug"
+  - "status:needs-approval"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A bug in a frozen subsystem still needs `status:approved` before any agent touches it — per `CONSTITUTION.md`, "the smallness of a fix is not a reason to skip the approval step; it's a reason the approval step should be fast." This form exists so that approval can in fact be fast, not so it can be skipped.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What's the actual observed behavior, and what did you expect instead? Include exact commands/output where possible.
+    validations:
+      required: true
+
+  - type: textarea
+    id: desired-outcome
+    attributes:
+      label: Desired outcome
+      description: What should happen instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: why-heimei
+    attributes:
+      label: Why this belongs in Heimei
+      description: Why is this worth fixing now rather than noted and deferred? (A low-severity cosmetic bug may legitimately belong in a future ROADMAP item instead of an issue.)
+    validations:
+      required: true
+
+  - type: input
+    id: relevant-adr
+    attributes:
+      label: Relevant ADR
+      description: The ADR governing the subsystem where this bug lives, if any.
+      placeholder: e.g. ADR-0014 (Doctor), or "N/A — not part of a frozen subsystem"
+    validations:
+      required: true
+
+  - type: textarea
+    id: allowed-scope
+    attributes:
+      label: Allowed scope
+      description: The specific file(s)/function(s) the fix is expected to touch, in prose — context for a human reviewer. The "Allowed paths" field below is the machine-enforced version of this.
+    validations:
+      required: true
+
+  - type: textarea
+    id: allowed-paths
+    attributes:
+      label: Allowed paths
+      description: |
+        Machine-readable. One exact repository-relative path or approved glob per line — this is what Scripts/ai/approve.sh and Scripts/ai/dispatch.sh actually validate every changed file against, not the prose field above.
+        Rejected outright: vague values ("as needed", "relevant files", "entire repository"), bare `*` or `/**`, absolute paths, paths containing `..`, control characters, or empty lines.
+        A path under VISION.md, CONSTITUTION.md, .ai/, Scripts/ai/, .github/workflows/, or any frozen subsystem (see PROJECT.md) is hard-denied regardless of what you list here — even for a one-line fix, it needs a dedicated architecture-approval record.
+      placeholder: |
+        Projects/Heimei/src/heimei/doctor/checks/storage.py
+        Projects/Heimei/tests/test_doctor_checks_storage.py
+    validations:
+      required: true
+
+  - type: textarea
+    id: forbidden-scope
+    attributes:
+      label: Forbidden scope
+      description: What must not change as a side effect of this fix (e.g. an unrelated public API, another subsystem).
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: The specific, checkable condition that proves the bug is fixed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: Tests
+      description: The regression test that will fail before the fix and pass after it.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: documentation-impact
+    attributes:
+      label: Documentation impact
+      description: Select all that apply.
+      multiple: true
+      options:
+        - ADR Revision section (if the fix touches a frozen subsystem)
+        - CHANGELOG.md
+        - None
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frozen-subsystem-impact
+    attributes:
+      label: Frozen-subsystem impact
+      description: Does the fix touch a frozen subsystem (see PROJECT.md)?
+      options:
+        - "No"
+        - "Yes — this issue, once status:approved, is the required separate approval for that specific fix"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: dependency-impact
+    attributes:
+      label: Dependency impact
+      description: Does the fix require a dependency change?
+      options:
+        - "None"
+        - "Yes — named in Allowed scope above"
+    validations:
+      required: true
+
+  - type: textarea
+    id: security-privacy-impact
+    attributes:
+      label: Security / privacy impact
+      description: Does this bug (or its fix) touch credentials, secrets, PII, or an attack surface? "None" is a valid, expected answer.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: approval-requirements
+    attributes:
+      label: Approval requirements (self-certified by whoever files this issue)
+      description: This issue cannot receive status:approved unless every box is true.
+      options:
+        - label: The fix is scoped to the bug described, not a broader refactor
+          required: true
+        - label: This does not modify VISION.md or CONSTITUTION.md
+          required: true
+        - label: This does not add a paid service, a new API key, or expose a credential
+          required: true

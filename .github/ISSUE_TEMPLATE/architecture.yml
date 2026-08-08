@@ -1,0 +1,155 @@
+name: Architecture Proposal
+description: Propose a new subsystem, a change to a frozen subsystem, or a workflow-level architectural decision.
+title: "[Architecture]: "
+labels:
+  - "type:architecture"
+  - "status:needs-approval"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read `CONSTITUTION.md`'s four evaluation questions and `PROJECT.md`'s frozen-subsystem table before filling this in. Architecture issues are the highest-scrutiny type — they are never auto-approved. See `AI_WORKFLOW.md` for the full lifecycle this issue enters once approved.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem are we trying to solve? Why does this decision need to be made now, rather than later?
+    validations:
+      required: true
+
+  - type: textarea
+    id: desired-outcome
+    attributes:
+      label: Desired outcome
+      description: What does the system look like once this is decided and implemented?
+    validations:
+      required: true
+
+  - type: textarea
+    id: why-heimei
+    attributes:
+      label: Why this belongs in Heimei
+      description: Answer CONSTITUTION.md's four questions explicitly — Digital Twin alignment, architectural clarity, future complexity, "will this make sense in ten years."
+    validations:
+      required: true
+
+  - type: input
+    id: relevant-adr
+    attributes:
+      label: Relevant ADR
+      description: An existing ADR number this extends or revises, or "New ADR needed" if this decision has no ADR yet.
+      placeholder: e.g. ADR-0011, or "New ADR needed"
+    validations:
+      required: true
+
+  - type: textarea
+    id: allowed-scope
+    attributes:
+      label: Allowed scope
+      description: Exactly which files, packages, or subsystems may be touched to implement this, in prose — context for a human reviewer. The "Allowed paths" field below is the machine-enforced version of this.
+    validations:
+      required: true
+
+  - type: textarea
+    id: allowed-paths
+    attributes:
+      label: Allowed paths
+      description: |
+        Machine-readable. One exact repository-relative path or approved glob per line — this is what Scripts/ai/approve.sh and Scripts/ai/dispatch.sh actually validate every changed file against, not the prose field above.
+        Rejected outright: vague values ("as needed", "relevant files", "entire repository"), bare `*` or `/**`, absolute paths, paths containing `..`, control characters, or empty lines.
+        A path under VISION.md, CONSTITUTION.md, .ai/, Scripts/ai/, .github/workflows/, or any frozen subsystem (see PROJECT.md) is hard-denied regardless of what you list here — it needs a dedicated architecture-approval record, not this one.
+      placeholder: |
+        Projects/Heimei/src/heimei/status/service.py
+        Projects/Heimei/tests/test_status_service.py
+        Projects/Heimei/docs/ARCHITECTURE.md
+    validations:
+      required: true
+
+  - type: textarea
+    id: forbidden-scope
+    attributes:
+      label: Forbidden scope
+      description: What must NOT be touched — name specific frozen subsystems, files, or documents explicitly out of bounds.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: The specific, checkable conditions that must hold for this to be considered done — not a restatement of the title.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: Tests
+      description: What tests will prove this works? Name the test files or patterns expected, following this repo's existing per-subsystem test convention.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: documentation-impact
+    attributes:
+      label: Documentation impact
+      description: Which documents does this touch? Select all that apply.
+      multiple: true
+      options:
+        - New ADR
+        - Existing ADR revision
+        - PROJECT.md
+        - ROADMAP.md (root, strategic)
+        - Projects/Heimei/docs/ROADMAP.md (tactical)
+        - Projects/Heimei/docs/ARCHITECTURE.md
+        - AI_WORKFLOW.md or AGENTS.md
+        - None
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frozen-subsystem-impact
+    attributes:
+      label: Frozen-subsystem impact
+      description: Does this change the behavior of Configuration, Core Runtime, Logging, Inventory, Doctor, or Status (see PROJECT.md for the current list)?
+      options:
+        - "No — does not touch any frozen subsystem's behavior"
+        - "Yes — the Allowed/Forbidden scope above states exactly what and why, and this issue is itself the required separate approval"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: dependency-impact
+    attributes:
+      label: Dependency impact
+      description: Does this add or change a Python dependency, a GitHub Action, or any external service?
+      options:
+        - "None"
+        - "New Python dependency — named in Allowed scope above"
+        - "New GitHub Action — named above, confirmed free/public-repo tier, no API key required"
+    validations:
+      required: true
+
+  - type: textarea
+    id: security-privacy-impact
+    attributes:
+      label: Security / privacy impact
+      description: Any credentials, secrets, PII, or new attack surface introduced? "None" is a valid, expected answer — don't skip this field.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: approval-requirements
+    attributes:
+      label: Approval requirements (self-certified by whoever files this issue)
+      description: This issue cannot receive status:approved unless every box is true.
+      options:
+        - label: This does not modify VISION.md or CONSTITUTION.md
+          required: true
+        - label: This does not accept or change any ADR's Status field on its own — that's a separate, explicit act
+          required: true
+        - label: This does not add a paid service, a new API key, or expose a credential
+          required: true
+        - label: This does not require merging, pushing to main, or production deployment as part of the work itself
+          required: true

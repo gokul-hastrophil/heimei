@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "required": ["summary", "blocking_findings", "non_blocking_findings", "recommendation"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "One-paragraph summary of the review."
+    },
+    "blocking_findings": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Issues that must be fixed before merge. Empty array if none."
+    },
+    "non_blocking_findings": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Worth noting but not required. Empty array if none."
+    },
+    "recommendation": {
+      "type": "string",
+      "enum": ["approve", "request_changes", "comment"]
+    }
+  }
+}
