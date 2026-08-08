@@ -5,6 +5,7 @@ last_reviewed: 2026-08-06
 references:
   - CONTRIBUTING.md
   - docs/ARCHITECTURE.md
+  - AI_WORKFLOW.md
 ---
 
 # Development
@@ -39,13 +40,21 @@ uv run heimei --help
 
 or activate the venv (`source .venv/bin/activate`) and run `heimei` directly. Heimei reads manifests from `$HEIMEI_HOME/System/manifest/` (default `HEIMEI_HOME` is `~/Heimei`) — most commands need at least `machine.yaml` there to do anything useful; see `README.md`'s CLI reference for what each command needs.
 
+**Checkouts outside `~/Heimei` must set `HEIMEI_HOME` explicitly.** `heimei.config.settings.ConfigPaths.home` defaults to `Path.home()/"Heimei"`, which is only correct when the repository genuinely lives at `~/Heimei`. Any other checkout — a GitHub Actions runner (repo at `$GITHUB_WORKSPACE`, `$HOME` is `/home/runner`), an isolated AI-dispatch worktree, or a manually cloned copy elsewhere on disk — must export `HEIMEI_HOME` pointing at that checkout's own root, or commands will silently resolve `System/manifest/` under the wrong `~/Heimei` and fail (or worse, read the wrong machine's manifest) instead of using the checkout actually being tested:
+
+```bash
+export HEIMEI_HOME="$(git rev-parse --show-toplevel)"
+```
+
+This is exactly what `.github/workflows/ci.yml` does (`HEIMEI_HOME: ${{ github.workspace }}`) and what `Scripts/ai/verify.sh` does for an isolated dispatch worktree — see that workflow's comments for the full explanation of the failure this avoids.
+
 ## Tests
 
 ```bash
 uv run pytest
 ```
 
-251 tests as of the 0.2.0 release, one `tests/test_<package>_<component>.py` file per source module — `testpaths = ["tests"]` in `pyproject.toml`. `uv run pytest --cov` for coverage (`pytest-cov` is already a dev dependency).
+287 tests as of the M1 completion review (`State/Reports/m1-completion-review.md`), one `tests/test_<package>_<component>.py` file per source module — `testpaths = ["tests"]` in `pyproject.toml`. `uv run pytest --cov` for coverage (`pytest-cov` is already a dev dependency).
 
 ## Linting
 
@@ -58,10 +67,14 @@ Configured in `ruff.toml` at the project root: `line-length = 100`, `target-vers
 ## Type checking
 
 ```bash
-uv run mypy .
+uv run mypy src/heimei
 ```
 
-As of 0.2.0, this reports exactly one pre-existing error: `tests/test_cli_main.py:10`, a missing annotation on a test double's class attribute (`FakeApplication.instances = []`). Everything else is clean. If `mypy` reports anything beyond that one line, treat it as a real regression, not noise.
+This is the exact command CI (`.github/workflows/ci.yml`) and `Scripts/ai/verify.sh` run, and it is currently clean — no errors. If `mypy` reports anything, treat it as a real regression, not noise.
+
+## Continuous Integration
+
+`.github/workflows/ci.yml` runs `uv sync --locked`, `uv run pytest -q`, `uv run ruff check .`, and `uv run mypy src/heimei` — the same four verification commands documented above — on every pull request and on every push to `main`, on GitHub's own infrastructure. This is the deterministic quality gate `AI_WORKFLOW.md` describes: a human never has to trust a self-reported "tests pass," because CI re-runs the identical checks against the actual pushed commit. The workflow sets `HEIMEI_HOME: ${{ github.workspace }}` for the same checkout-root reason described above.
 
 ## Known rough edge: `pre-commit`
 
@@ -80,7 +93,6 @@ See `docs/ARCHITECTURE.md`'s "Project layout" section — not repeated here.
 ## Next Actions
 
 - Add `.pre-commit-config.yaml` (or remove the stray hook) so `PRE_COMMIT_ALLOW_NO_CONFIG=1` stops being necessary.
-- Add a CI workflow (`.github/workflows/` is currently empty) running the three commands above on every push/PR — see `docs/ROADMAP.md`.
 
 ## Open Questions
 
@@ -90,4 +102,5 @@ See `docs/ARCHITECTURE.md`'s "Project layout" section — not repeated here.
 
 - `CONTRIBUTING.md` — process and standards this setup supports
 - `docs/ARCHITECTURE.md` — project layout and how the subsystems fit together
-- `docs/ROADMAP.md` — CI and pre-commit-config are both tracked there as M2 candidates
+- `docs/ROADMAP.md` — pre-commit-config is tracked there as an M2 candidate
+- `AI_WORKFLOW.md` — the control-plane policy CI serves as a deterministic quality gate for
