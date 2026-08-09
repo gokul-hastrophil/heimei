@@ -1,5 +1,6 @@
 {
   "type": "object",
+  "additionalProperties": false,
   "required": ["summary", "blocking_findings", "non_blocking_findings", "recommendation"],
   "properties": {
     "summary": {
