@@ -1740,8 +1740,8 @@ class TestReviewShArgumentValidation:
             extra_env={"FAKE_GH_ISSUE_JSON": issue_json, "FAKE_GH_PULLS_JSON": pulls_json},
         )
         assert result.returncode == 0, result.stderr
-        assert "never auto-invoked" in result.stdout
-        assert "codex exec" in result.stdout
+        assert "no non-empty diff batch exists" in result.stdout
+        assert "codex exec" not in result.stdout
         _, log_path = fake_gh_path
         calls = log_path.read_text().splitlines()
         mutating_prefixes = ("label create", "label edit", "issue comment", "issue edit", "pr create", "pr review", "pr merge")
@@ -1802,7 +1802,7 @@ class TestReviewRepositoryNodeId:
 
     def _run_generation(self, fake_gh_path, issue_number, approval_id, issue_json, head_repo, pr_number="4"):
         real_head = subprocess.run(
-            ["git", "rev-parse", "origin/main"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
         ).stdout.strip()
         pulls_json = json.dumps({
             "base": {"ref": "main", "sha": real_head},
@@ -1827,7 +1827,7 @@ class TestReviewRepositoryNodeId:
             head_repo={"id": 1320669590, "node_id": self.POLICY_REPO_NODE_ID},
         )
         assert result.returncode == 0, result.stderr
-        assert "never auto-invoked" in result.stdout
+        assert "no non-empty diff batch exists" in result.stdout
 
     def test_generation_rejects_different_node_id(self, fake_gh_path):
         issue_json, record = build_dispatch_ready_issue(302, "low", "appr-nodeid-bad")

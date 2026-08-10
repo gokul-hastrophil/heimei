@@ -679,12 +679,22 @@ if [[ "${REVIEWER_AGENT}" == "codex" ]]; then
   BUNDLE_DIR="${RUN_LOG_DIR}/codex-manual-bundle"
   mkdir -p "${BUNDLE_DIR}"
   cp "${SCHEMA_FILE}" "${BUNDLE_DIR}/review-schema.json"
+  CODEX_PROMPT_COUNT=0
   for ((b = 0; b <= BATCH_INDEX; b++)); do
     batch_file="${RUN_LOG_DIR}/batch-${b}.txt"
     [[ -s "${batch_file}" ]] || continue
     cp "${batch_file}" "${BUNDLE_DIR}/"
     build_codex_batch_prompt "${b}" "${batch_file}" "${CODEX_CONTEXT_FILE}" >/dev/null
+    CODEX_PROMPT_COUNT=$((CODEX_PROMPT_COUNT + 1))
   done
+
+  if [[ "${CODEX_PROMPT_COUNT}" -eq 0 ]]; then
+    cat <<EOF
+Codex review skipped for PR #${PR_NUMBER}: no non-empty diff batch exists.
+No Codex prompt was generated because there is nothing to review.
+EOF
+    exit 0
+  fi
 
   cat <<EOF
 
