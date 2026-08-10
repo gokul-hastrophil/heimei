@@ -943,8 +943,8 @@ ai_require_branch_protection() {
     esac
   done
 
-  [[ "${pr_required}" == "true" && "${review_count}" -ge 1 ]] \
-    || ai_die "Branch protection for '${branch}' does not confirm pull-request review enforcement (required_pull_request_reviews with >=1 required approval) — failing closed."
+  [[ "${pr_required}" == "true" && "${review_count}" -ge 0 ]] \
+    || ai_die "Branch protection for '${branch}' does not confirm pull-request enforcement (required_pull_request_reviews present with a readable non-negative required approval count) — failing closed."
   [[ "${force_push_allowed}" == "false" ]] \
     || ai_die "Branch protection for '${branch}' allows force pushes (or this cannot be confirmed) — failing closed."
   [[ "${deletion_allowed}" == "false" ]] \
@@ -990,7 +990,7 @@ ai_require_branch_protection() {
       || ai_die "Repository ruleset ${ruleset_id} declares ${bypass_actor_count} bypass actor(s) — cannot confirm the current automation credential is excluded from bypassing protection. Failing closed."
   done <<<"${active_ruleset_ids}"
 
-  ai_log_info "Branch protection for '${branch}' confirmed: PR review required (>=${review_count}), force-push disallowed, deletion disallowed, required checks configured, enforced for admins, no active-ruleset bypass actors."
+  ai_log_info "Branch protection for '${branch}' confirmed: PR required (required approvals=${review_count}), force-push disallowed, deletion disallowed, required checks configured, enforced for admins, no active-ruleset bypass actors."
 }
 
 # ---------------------------------------------------------------------------

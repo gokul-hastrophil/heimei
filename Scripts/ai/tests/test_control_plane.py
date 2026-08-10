@@ -881,7 +881,9 @@ case "$1" in
         mode="${FAKE_GH_PROTECTION_MODE:-ok}"
         case "${mode}" in
           ok)
-            echo '{"required_pull_request_reviews":{"required_approving_review_count":1},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false},"required_status_checks":{"contexts":["ci"]}}'
+            # Solo-maintainer governance intentionally requires a PR while
+            # allowing zero required approving reviews.
+            echo '{"required_pull_request_reviews":{"required_approving_review_count":0},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false},"required_status_checks":{"contexts":["ci"]}}'
             exit 0 ;;
            no-protection)
             echo '{"message":"Branch not protected"}' >&2
@@ -1077,7 +1079,7 @@ class TestBranchProtectionFailsClosed:
             ("403", "FAILED CLOSED"),
             ("404", "FAILED CLOSED"),
             ("malformed-json", "malformed"),
-            ("pr-not-required", "pull-request review enforcement"),
+            ("pr-not-required", "pull-request enforcement"),
             ("force-push-allowed", "force pushes"),
             ("deletions-allowed", "branch deletion"),
             ("checks-absent", "required status checks"),
@@ -1106,6 +1108,7 @@ class TestBranchProtectionFailsClosed:
             },
         )
         assert result.returncode == 0, result.stderr
+        assert "required approvals=0" in result.stderr
 
     def test_bypass_actor_present_fails_closed(self, fake_gh_path):
         result = run_bash(
