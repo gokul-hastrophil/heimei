@@ -5,7 +5,7 @@ last_reviewed: 2026-08-06
 references:
   - CONTRIBUTING.md
   - docs/ARCHITECTURE.md
-  - ../../AI_WORKFLOW.md
+  - ../../../AI_WORKFLOW.md
 ---
 
 # Development
@@ -74,7 +74,7 @@ This is the exact command CI (`.github/workflows/ci.yml`) and `Scripts/ai/verify
 
 ## Continuous Integration
 
-`.github/workflows/ci.yml` runs `uv sync --locked`, `uv run pytest -q`, `uv run ruff check .`, and `uv run mypy src/heimei` — the same four verification commands documented above — on every pull request and on every push to `main`, on GitHub's own infrastructure. This is the deterministic quality gate `../../AI_WORKFLOW.md` describes: a human never has to trust a self-reported "tests pass," because CI re-runs the identical checks against the actual pushed commit. The workflow sets `HEIMEI_HOME: ${{ github.workspace }}` for the same checkout-root reason described above.
+`.github/workflows/ci.yml` runs `uv sync --locked`, `uv run pytest -q`, `uv run ruff check .`, and `uv run mypy src/heimei` — the same four verification checks documented above — on every pull request and on every push to `main`, on GitHub's own infrastructure. This is the deterministic quality gate `../../../AI_WORKFLOW.md` describes: a human never has to trust a self-reported "tests pass," because CI re-runs the identical checks against the actual pushed commit. The workflow sets `HEIMEI_HOME: ${{ github.workspace }}` for the same checkout-root reason described above.
 
 ## Known rough edge: `pre-commit`
 
@@ -103,4 +103,4 @@ See `docs/ARCHITECTURE.md`'s "Project layout" section — not repeated here.
 - `CONTRIBUTING.md` — process and standards this setup supports
 - `docs/ARCHITECTURE.md` — project layout and how the subsystems fit together
 - `docs/ROADMAP.md` — pre-commit-config is tracked there as an M2 candidate
-- `../../AI_WORKFLOW.md` — the control-plane policy CI serves as a deterministic quality gate for
+- `../../../AI_WORKFLOW.md` — the control-plane policy for which CI serves as a deterministic quality gate
