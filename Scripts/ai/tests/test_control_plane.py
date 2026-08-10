@@ -857,6 +857,23 @@ case "$1" in
       echo "${FAKE_GH_PR_LIST:-[]}"
       exit 0
     fi
+    if [[ "$2" == "review" ]]; then
+      exit 0
+    fi
+    ;;
+  label)
+    if [[ "$2" == "list" ]]; then
+      if [[ -n "${FAKE_GH_LABEL_LIST_FAIL:-}" ]]; then
+        echo "fake gh: simulated label list failure (network/permission)" >&2
+        exit 1
+      fi
+      # Real `gh label list --json name --jq '.[].name'` applies the
+      # --jq filter itself before printing — every caller in this repo
+      # uses that exact filter, so replicate it here rather than
+      # parsing --jq generically.
+      printf '%s' "${FAKE_GH_LABEL_LIST_JSON:-[]}" | jq -r '.[].name'
+      exit 0
+    fi
     ;;
   api)
     case "$*" in
@@ -962,7 +979,14 @@ case "$1" in
         echo '{"ref":"unset","object":{"sha":"unset"}}'
         exit 0 ;;
       *"/pulls/"*)
-        pulls_default='{"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"head":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"id":"R_kgDOTrfRlg"}},"changed_files":0,"title":"t","html_url":"https://example/1"}'
+        # repo.id is the REST numeric database ID, repo.node_id is the
+        # GraphQL node ID that .ai/policy.toml's repository.id actually
+        # stores — deliberately DIFFERENT-shaped values here (a real
+        # numeric ID, not the node-ID string) so a caller that
+        # mistakenly compares .id against the policy ID (the bug this
+        # harness now regression-tests) fails, and only a correct
+        # .node_id comparison succeeds.
+        pulls_default='{"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"head":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"id":1320669590,"node_id":"R_kgDOTrfRlg"}},"changed_files":0,"title":"t","html_url":"https://example/1"}'
         echo "${FAKE_GH_PULLS_JSON:-${pulls_default}}"
         exit 0 ;;
       *"user"*)
@@ -1024,7 +1048,9 @@ def fake_gh_path(tmp_path):
     return bin_dir, log_path
 
 
-def run_script(script: str, args: list[str], fake_gh_path, extra_env: dict | None = None) -> subprocess.CompletedProcess:
+def run_script(
+    script: str, args: list[str], fake_gh_path, extra_env: dict | None = None, cwd: Path | None = None
+) -> subprocess.CompletedProcess:
     bin_dir, log_path = fake_gh_path
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
@@ -1033,7 +1059,7 @@ def run_script(script: str, args: list[str], fake_gh_path, extra_env: dict | Non
         env.update(extra_env)
     return subprocess.run(
         [str(SCRIPTS_DIR / script), *args],
-        cwd=str(REPO_ROOT),
+        cwd=str(cwd or REPO_ROOT),
         capture_output=True,
         text=True,
         env=env,
@@ -1676,10 +1702,23 @@ class TestReviewShArgumentValidation:
         assert "not allowed by this approval" in result.stderr
 
     def test_codex_reviewer_never_auto_invoked_produces_manual_bundle_only(self, fake_gh_path, tmp_path):
+        # base == head (this repo's real current HEAD) so the local
+        # git fetch/cat-file checks succeed against objects already
+        # present locally (no dependency on what PR #4 actually looks
+        # like on GitHub), and the resulting diff is genuinely empty —
+        # matching changed_files: 0 exactly, so the file-count-parity
+        # check passes trivially and this test reaches the codex
+        # early-exit path under test. base_sha must also be a REAL,
+        # resolvable commit (not a fake "a"*40) now that the codex
+        # bundle extracts AI_WORKFLOW.md/CONSTITUTION.md/PROJECT.md via
+        # `git show <base_sha>:<doc>` — a nonexistent object would
+        # correctly abort bundle generation, which is exactly what a
+        # fake SHA used to (harmlessly) go untested.
+        real_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout.strip()
         record = {
             "approval_id": "appr-2", "repository_id": "R_kgDOTrfRlg", "issue_number": 2,
             "approver": "gokul-hastrophil", "agent": "claude", "risk": "low",
-            "issue_body_digest": "", "allowed_paths": ["a.txt"], "base_sha": "a" * 40,
+            "issue_body_digest": "", "allowed_paths": ["a.txt"], "base_sha": real_head,
             "timestamp": "x", "schema": "heimei-approval/v1",
         }
         issue_body = "Problem: y"
@@ -1689,16 +1728,9 @@ class TestReviewShArgumentValidation:
             "number": 2, "title": "t", "state": "OPEN", "labels": [], "body": issue_body, "url": "u",
             "comments": [{"id": "c1", "author": {"login": "gokul-hastrophil"}, "body": body, "createdAt": "2026-01-01T00:00:00Z"}],
         })
-        # base == head (this repo's real current HEAD) so the local
-        # git fetch/cat-file checks succeed against objects already
-        # present locally (no dependency on what PR #4 actually looks
-        # like on GitHub), and the resulting diff is genuinely empty —
-        # matching changed_files: 0 exactly, so the file-count-parity
-        # check passes trivially and this test reaches the codex
-        # early-exit path under test.
-        real_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout.strip()
         pulls_json = json.dumps({
-            "base": {"ref": "main", "sha": real_head}, "head": {"sha": real_head, "repo": {"id": "R_kgDOTrfRlg"}},
+            "base": {"ref": "main", "sha": real_head},
+            "head": {"sha": real_head, "repo": {"id": 1320669590, "node_id": "R_kgDOTrfRlg"}},
             "changed_files": 0, "title": "t", "html_url": "https://example/4",
         })
         result = run_script(
@@ -1708,13 +1740,269 @@ class TestReviewShArgumentValidation:
             extra_env={"FAKE_GH_ISSUE_JSON": issue_json, "FAKE_GH_PULLS_JSON": pulls_json},
         )
         assert result.returncode == 0, result.stderr
-        assert "never auto-invoked" in result.stdout
-        assert "codex exec" in result.stdout
+        assert "the PR has zero changed files" in result.stdout
+        assert "codex exec" not in result.stdout
         _, log_path = fake_gh_path
         calls = log_path.read_text().splitlines()
         mutating_prefixes = ("label create", "label edit", "issue comment", "issue edit", "pr create", "pr review", "pr merge")
         for call in calls:
             assert not call.startswith(mutating_prefixes)
+
+
+_OMIT_KEY = object()
+
+# The full fail-closed matrix a checked extraction must reject: key
+# absent, JSON null, empty string, and every non-string JSON type —
+# plus an ordinary but wrong string. A prior version used `// ""` to
+# map ALL of these except the last straight to an empty string and
+# then only checked `[[ -n ... ]]`, which means every one of these
+# except "different_string" was silently treated as "field not
+# present" and the whole comparison was skipped — same-repository
+# provenance was not enforced at all for a missing/null/malformed
+# identity.
+NODE_ID_FAILURE_CASES = [
+    ("missing", _OMIT_KEY),
+    ("null", None),
+    ("empty_string", ""),
+    ("numeric", 1320669590),
+    ("boolean", True),
+    ("array", ["R_kgDOTrfRlg"]),
+    ("object", {"id": "R_kgDOTrfRlg"}),
+    ("different_string", "R_kgDOSomeOtherRepoXX"),
+]
+
+
+class TestReviewRepositoryNodeId:
+    """Smoke-test defect 4: GitHub's REST PR payload carries two
+    distinct repository identifiers — .head.repo.id is the numeric
+    REST/database ID (e.g. 1320669590), .head.repo.node_id is the
+    GraphQL node ID (e.g. "R_kgDOTrfRlg") that .ai/policy.toml's
+    repository.id actually stores. review.sh used to read .head.repo.id
+    and compare it to the policy node ID, so every same-repository PR
+    was rejected as if it were a fork. Covers both the generation path
+    and the --post path, and includes tests that would only pass if
+    the numeric .id is never consulted at all — even when a contrived
+    payload makes .id itself equal the policy string, or when .node_id
+    is missing/null/empty/wrong-typed and a naive `// ""` extraction
+    would have silently skipped the whole check instead of failing
+    closed."""
+
+    POLICY_REPO_NODE_ID = "R_kgDOTrfRlg"
+    WRONG_NODE_ID = "R_kgDOSomeOtherRepoXX"
+    ARTIFACT_STORE = REPO_ROOT / "Temp" / "ai-runs" / "review-artifacts"
+
+    @staticmethod
+    def _head_repo(node_id_value, *, id_value=1320669590):
+        repo = {"id": id_value}
+        if node_id_value is not _OMIT_KEY:
+            repo["node_id"] = node_id_value
+        return repo
+
+    # --- generation path --------------------------------------------------
+
+    def _run_generation(self, fake_gh_path, issue_number, approval_id, issue_json, head_repo, pr_number="4"):
+        real_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        pulls_json = json.dumps({
+            "base": {"ref": "main", "sha": real_head},
+            "head": {"sha": real_head, "repo": head_repo},
+            "changed_files": 0, "title": "t", "html_url": "https://example/nodeid",
+        })
+        return run_script(
+            "review.sh",
+            [pr_number, "--issue", str(issue_number), "--approval-id", approval_id,
+             "--implementation-agent", "claude", "--reviewer", "codex"],
+            fake_gh_path,
+            extra_env={"FAKE_GH_ISSUE_JSON": issue_json, "FAKE_GH_PULLS_JSON": pulls_json},
+        )
+
+    def test_generation_accepts_same_repo_via_node_id(self, fake_gh_path):
+        # id is a real, differing numeric value on purpose — item 7:
+        # a mismatched numeric .id must not block acceptance when
+        # .node_id correctly matches policy.
+        issue_json, record = build_dispatch_ready_issue(301, "low", "appr-nodeid-ok")
+        result = self._run_generation(
+            fake_gh_path, 301, "appr-nodeid-ok", issue_json,
+            head_repo={"id": 1320669590, "node_id": self.POLICY_REPO_NODE_ID},
+        )
+        assert result.returncode == 0, result.stderr
+        assert "the PR has zero changed files" in result.stdout
+
+    def test_generation_rejects_different_node_id(self, fake_gh_path):
+        issue_json, record = build_dispatch_ready_issue(302, "low", "appr-nodeid-bad")
+        result = self._run_generation(
+            fake_gh_path, 302, "appr-nodeid-bad", issue_json,
+            head_repo={"id": 1320669590, "node_id": self.WRONG_NODE_ID},
+        )
+        assert result.returncode != 0
+        assert "repository node ID" in result.stderr
+        assert "fork" in result.stderr
+
+    def test_generation_rejects_even_when_numeric_id_equals_policy_string(self, fake_gh_path):
+        # Item 7, sharpest form: .id is set to the exact policy node-ID
+        # STRING (never a real shape GitHub sends, but exactly what the
+        # old buggy code would have accepted since it compared .id, not
+        # .node_id). If review.sh ever regresses to reading .id again,
+        # this test flips from reject to accept and catches it.
+        issue_json, record = build_dispatch_ready_issue(303, "low", "appr-nodeid-trap")
+        result = self._run_generation(
+            fake_gh_path, 303, "appr-nodeid-trap", issue_json,
+            head_repo={"id": self.POLICY_REPO_NODE_ID, "node_id": self.WRONG_NODE_ID},
+        )
+        assert result.returncode != 0
+        assert "repository node ID" in result.stderr
+
+    def test_generation_accepts_regardless_of_a_differing_numeric_id(self, fake_gh_path):
+        """A differing numeric .id must not matter at all when
+        .node_id is the correct trusted ID — proves .id is never part
+        of the comparison, not merely that it isn't a blocker."""
+        issue_json, record = build_dispatch_ready_issue(310, "low", "appr-nodeid-idirrelevant")
+        result = self._run_generation(
+            fake_gh_path, 310, "appr-nodeid-idirrelevant", issue_json,
+            head_repo={"id": 999999999, "node_id": self.POLICY_REPO_NODE_ID},
+        )
+        assert result.returncode == 0, result.stderr
+
+    @pytest.mark.parametrize("case_name,node_id_value", NODE_ID_FAILURE_CASES, ids=[c[0] for c in NODE_ID_FAILURE_CASES])
+    def test_generation_rejects_malformed_or_missing_node_id(self, fake_gh_path, case_name, node_id_value):
+        issue_number = 400 + NODE_ID_FAILURE_CASES.index((case_name, node_id_value))
+        approval_id = f"appr-nodeid-gen-{case_name}"
+        issue_json, record = build_dispatch_ready_issue(issue_number, "low", approval_id)
+        result = self._run_generation(
+            fake_gh_path, issue_number, approval_id, issue_json,
+            head_repo=self._head_repo(node_id_value),
+        )
+        assert result.returncode != 0, f"case {case_name!r} should have failed closed but succeeded: {result.stdout}"
+        assert "repository node ID" in result.stderr
+
+    # --- --post path -------------------------------------------------------
+
+    def _write_envelope(self, *, pr_number, issue_number, approval_id, base_sha, head_sha):
+        self.ARTIFACT_STORE.mkdir(parents=True, exist_ok=True)
+        envelope = {
+            "schema": "heimei-review-envelope/v1",
+            "repository_id": self.POLICY_REPO_NODE_ID,
+            "repository_full_name": "gokul-hastrophil/heimei",
+            "pr_number": pr_number,
+            "issue_number": issue_number,
+            "approval_id": approval_id,
+            "base_sha": base_sha,
+            "head_sha": head_sha,
+            "reviewer": "codex",
+            "implementation_agent": "claude",
+            "manifest_hash": "x" * 64,
+            "review_body": "Looks fine.",
+            "generated_at": "2026-01-01T00:00:00Z",
+        }
+        data = json.dumps(envelope).encode()
+        digest = hashlib.sha256(data).hexdigest()
+        path = self.ARTIFACT_STORE / f"{digest}.json"
+        path.write_bytes(data)
+        return digest, path
+
+    def _run_post(self, fake_gh_path, pr_number, digest, issue_json, base_sha, head_sha, head_repo):
+        pulls_json = json.dumps({
+            "base": {"ref": "main", "sha": base_sha},
+            "head": {"sha": head_sha, "repo": head_repo},
+            "changed_files": 0, "title": "t", "html_url": "https://example/nodeid-post",
+        })
+        return run_script(
+            "review.sh",
+            [str(pr_number), "--post", "--confirm-digest", digest],
+            fake_gh_path,
+            extra_env={"FAKE_GH_ISSUE_JSON": issue_json, "FAKE_GH_PULLS_JSON": pulls_json},
+        )
+
+    def test_post_accepts_same_repo_via_node_id(self, fake_gh_path):
+        issue_json, record = build_dispatch_ready_issue(304, "low", "appr-nodeid-post-ok")
+        base_sha = "a" * 40
+        head_sha = "b" * 40
+        digest, path = self._write_envelope(
+            pr_number=4, issue_number=304, approval_id="appr-nodeid-post-ok", base_sha=base_sha, head_sha=head_sha,
+        )
+        try:
+            result = self._run_post(
+                fake_gh_path, 4, digest, issue_json, base_sha, head_sha,
+                head_repo={"id": 1320669590, "node_id": self.POLICY_REPO_NODE_ID},
+            )
+            assert result.returncode == 0, result.stderr
+            assert "Posted as a plain comment review" in result.stdout + result.stderr or "Posted as a plain comment review" in result.stdout
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_post_rejects_different_node_id(self, fake_gh_path):
+        issue_json, record = build_dispatch_ready_issue(305, "low", "appr-nodeid-post-bad")
+        base_sha = "c" * 40
+        head_sha = "d" * 40
+        digest, path = self._write_envelope(
+            pr_number=4, issue_number=305, approval_id="appr-nodeid-post-bad", base_sha=base_sha, head_sha=head_sha,
+        )
+        try:
+            result = self._run_post(
+                fake_gh_path, 4, digest, issue_json, base_sha, head_sha,
+                head_repo={"id": 1320669590, "node_id": self.WRONG_NODE_ID},
+            )
+            assert result.returncode != 0
+            assert "repository node ID" in result.stderr
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_post_rejects_even_when_numeric_id_equals_policy_string(self, fake_gh_path):
+        issue_json, record = build_dispatch_ready_issue(306, "low", "appr-nodeid-post-trap")
+        base_sha = "e" * 40
+        head_sha = "f" * 40
+        digest, path = self._write_envelope(
+            pr_number=4, issue_number=306, approval_id="appr-nodeid-post-trap", base_sha=base_sha, head_sha=head_sha,
+        )
+        try:
+            result = self._run_post(
+                fake_gh_path, 4, digest, issue_json, base_sha, head_sha,
+                head_repo={"id": self.POLICY_REPO_NODE_ID, "node_id": self.WRONG_NODE_ID},
+            )
+            assert result.returncode != 0
+            assert "repository node ID" in result.stderr
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_post_accepts_regardless_of_a_differing_numeric_id(self, fake_gh_path):
+        """A differing numeric .id must not matter at all when
+        .node_id is the correct trusted ID — proves .id is never part
+        of the comparison, not merely that it isn't a blocker."""
+        issue_json, record = build_dispatch_ready_issue(311, "low", "appr-nodeid-post-idirrelevant")
+        base_sha = "1" * 40
+        head_sha = "2" * 40
+        digest, path = self._write_envelope(
+            pr_number=4, issue_number=311, approval_id="appr-nodeid-post-idirrelevant", base_sha=base_sha, head_sha=head_sha,
+        )
+        try:
+            result = self._run_post(
+                fake_gh_path, 4, digest, issue_json, base_sha, head_sha,
+                head_repo={"id": 999999999, "node_id": self.POLICY_REPO_NODE_ID},
+            )
+            assert result.returncode == 0, result.stderr
+        finally:
+            path.unlink(missing_ok=True)
+
+    @pytest.mark.parametrize("case_name,node_id_value", NODE_ID_FAILURE_CASES, ids=[c[0] for c in NODE_ID_FAILURE_CASES])
+    def test_post_rejects_malformed_or_missing_node_id(self, fake_gh_path, case_name, node_id_value):
+        issue_number = 500 + NODE_ID_FAILURE_CASES.index((case_name, node_id_value))
+        approval_id = f"appr-nodeid-post-{case_name}"
+        issue_json, record = build_dispatch_ready_issue(issue_number, "low", approval_id)
+        base_sha = "3" * 40
+        head_sha = "4" * 40
+        digest, path = self._write_envelope(
+            pr_number=4, issue_number=issue_number, approval_id=approval_id, base_sha=base_sha, head_sha=head_sha,
+        )
+        try:
+            result = self._run_post(
+                fake_gh_path, 4, digest, issue_json, base_sha, head_sha,
+                head_repo=self._head_repo(node_id_value),
+            )
+            assert result.returncode != 0, f"case {case_name!r} should have failed closed but succeeded: {result.stdout}"
+            assert "repository node ID" in result.stderr
+        finally:
+            path.unlink(missing_ok=True)
 
 
 class TestAgentGitWrapper:
@@ -1853,6 +2141,104 @@ class TestAgentGitWrapper:
             assert allowed.stdout.strip() == branch
         finally:
             self._cleanup(branch, wt_dir)
+
+
+class TestBootstrapGithubDraftPrLabel:
+    """Defect 1: dispatch.sh labels the issue status:draft-pr right
+    after opening the draft PR (dispatch.sh:818), but
+    bootstrap-github.sh never provisioned that label — so the very
+    first real dispatch run would hit ai_replace_status_label's
+    destination-existence check (defect 2) and fail closed instead of
+    transitioning cleanly. Dry-run only: this never calls --execute, so
+    no real gh mutation happens either way."""
+
+    def test_dry_run_lists_status_draft_pr_as_a_canonical_label(self, fake_gh_path):
+        result = run_script("bootstrap-github.sh", ["--dry-run"], fake_gh_path)
+        assert result.returncode == 0, result.stderr
+        # ai_log_info writes to stderr (common.sh) — the per-label
+        # dry-run lines ("missing -> create: <name>") land there, not
+        # on stdout, which is reserved for the manual branch-protection
+        # block printed at the end.
+        assert "status:draft-pr" in result.stderr
+
+    def test_stale_ci_guidance_replaced_with_the_real_required_check(self, fake_gh_path):
+        result = run_script("bootstrap-github.sh", ["--dry-run"], fake_gh_path)
+        assert result.returncode == 0, result.stderr
+        assert "once one exists" not in result.stdout
+        assert "pytest / ruff / mypy" in result.stdout
+
+
+class TestReplaceStatusLabelFailsClosed:
+    """Defect 2: ai_replace_status_label used to remove every existing
+    status:* label from the issue BEFORE attempting to add the new
+    one. If the destination label didn't exist repository-wide (a
+    typo, not yet provisioned, mid-migration), the final --add-label
+    call died with the old label already stripped — leaving the issue
+    with no status label at all. ai_require_label_exists now confirms
+    the destination label exists in the repository before anything on
+    the issue is touched, and fails closed — never auto-creating a
+    label — both when the label genuinely doesn't exist and when the
+    existence check itself cannot be completed (API/network failure)."""
+
+    ISSUE_JSON = json.dumps({
+        "number": 9, "title": "t", "state": "OPEN",
+        "labels": [{"name": "status:in-progress"}], "body": "b", "url": "u", "comments": [],
+    })
+
+    def _env(self, fake_gh_path, **extra):
+        bin_dir, log_path = fake_gh_path
+        env = dict(os.environ)
+        env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        env["FAKE_GH_LOG"] = str(log_path)
+        env["FAKE_GH_ISSUE_JSON"] = self.ISSUE_JSON
+        env.update(extra)
+        return env
+
+    def test_target_label_exists_transition_succeeds(self, fake_gh_path):
+        _, log_path = fake_gh_path
+        label_list = json.dumps([{"name": "status:in-progress"}, {"name": "status:draft-pr"}])
+        env = self._env(fake_gh_path, FAKE_GH_LABEL_LIST_JSON=label_list)
+        result = run_bash("ai_replace_status_label 9 status:draft-pr", env=env)
+        assert result.returncode == 0, result.stderr
+        calls = log_path.read_text().splitlines()
+        assert any(c.startswith("issue edit 9") and "--remove-label status:in-progress" in c for c in calls)
+        assert any(c.startswith("issue edit 9") and "--add-label status:draft-pr" in c for c in calls)
+
+    def test_target_label_missing_fails_before_removing_existing(self, fake_gh_path):
+        _, log_path = fake_gh_path
+        # status:draft-pr deliberately absent from the repo-wide list.
+        label_list = json.dumps([{"name": "status:in-progress"}])
+        env = self._env(fake_gh_path, FAKE_GH_LABEL_LIST_JSON=label_list)
+        result = run_bash("ai_replace_status_label 9 status:draft-pr", env=env)
+        assert result.returncode != 0
+        assert "does not exist" in result.stderr
+        calls = log_path.read_text().splitlines()
+        assert not any("--remove-label" in c for c in calls), (
+            f"existing status label was removed before the destination-label check failed: {calls}"
+        )
+        assert not any("--add-label" in c for c in calls)
+
+    def test_label_lookup_failure_fails_closed_before_mutation(self, fake_gh_path):
+        _, log_path = fake_gh_path
+        env = self._env(fake_gh_path, FAKE_GH_LABEL_LIST_FAIL="1")
+        result = run_bash("ai_replace_status_label 9 status:draft-pr", env=env)
+        assert result.returncode != 0
+        assert "Could not query labels" in result.stderr
+        calls = log_path.read_text().splitlines()
+        assert not any("--remove-label" in c for c in calls)
+        assert not any("--add-label" in c for c in calls)
+
+    def test_never_auto_creates_the_missing_destination_label(self, fake_gh_path):
+        """ai_require_label_exists must only ever read (gh label list)
+        — never gh label create — leaving provisioning to
+        bootstrap-github.sh exclusively."""
+        _, log_path = fake_gh_path
+        label_list = json.dumps([{"name": "status:in-progress"}])
+        env = self._env(fake_gh_path, FAKE_GH_LABEL_LIST_JSON=label_list)
+        result = run_bash("ai_replace_status_label 9 status:draft-pr", env=env)
+        assert result.returncode != 0
+        calls = log_path.read_text().splitlines()
+        assert not any(c.startswith("label create") for c in calls)
 
 
 # ---------------------------------------------------------------------------
@@ -2185,15 +2571,28 @@ class TestAtomicClaimConcurrency:
 
 @pytest.fixture
 def real_base_head_shas():
+    """(base, head, count, changed_paths) for the real HEAD~1..HEAD
+    pair in THIS checkout. changed_paths is derived from an actual
+    `git diff --name-only -z` (NUL-safe — no ambiguity from spaces or
+    a pathological embedded newline) rather than assumed: which files
+    a given commit touches is not something a test should hard-code,
+    since it changes every time this repair commit's own contents
+    change. Any test that needs to inject a failure for "some real
+    changed path" must pick one from changed_paths, never name a
+    specific file directly.
+
+    count is len(changed_paths), not a raw newline count — the prior
+    `stdout.strip().count("\\n") + 1` silently returned 1 for a
+    genuinely empty diff (str.count on "" is 0, plus 1), which would
+    have been a latent miscount had base and head ever coincided.
+    """
     base = subprocess.run(["git", "rev-parse", "HEAD~1"], cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout.strip()
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout.strip()
-    count = int(
-        subprocess.run(["git", "diff", "--name-only", base, head], cwd=REPO_ROOT, capture_output=True, text=True, check=True)
-        .stdout.strip()
-        .count("\n")
-        + 1
-    )
-    return base, head, count
+    raw = subprocess.run(
+        ["git", "diff", "--name-only", "-z", base, head], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+    ).stdout
+    changed_paths = [p for p in raw.split("\0") if p]
+    return base, head, len(changed_paths), changed_paths
 
 
 @pytest.fixture
@@ -2267,17 +2666,20 @@ class TestReviewGitFailureAborts:
     def _fixture_issue_and_pulls(self, issue_number, base, head, count):
         issue_json, record = build_dispatch_ready_issue(issue_number, "low", "appr-review-git", base_sha=base)
         pulls_json = json.dumps({
-            "base": {"ref": "main", "sha": base}, "head": {"sha": head, "repo": {"id": "R_kgDOTrfRlg"}},
+            "base": {"ref": "main", "sha": base},
+            "head": {"sha": head, "repo": {"id": 1320669590, "node_id": "R_kgDOTrfRlg"}},
             "changed_files": count, "title": "t", "html_url": "https://example/9",
         })
         return issue_json, pulls_json
 
     def test_review_per_file_git_diff_failure_aborts(self, fake_gh_path, fake_git_selective_failure, real_base_head_shas):
-        base, head, count = real_base_head_shas
+        base, head, count, changed_paths = real_base_head_shas
+        if not changed_paths:
+            pytest.skip("HEAD~1..HEAD has no changed paths in this checkout — nothing to inject a diff failure for.")
         issue_json, pulls_json = self._fixture_issue_and_pulls(201, base, head, count)
         result = self._run_review(
             fake_gh_path, fake_git_selective_failure, 201, issue_json, pulls_json,
-            extra_env={"FAKE_GIT_FAIL_DIFF_PATH": "CLAUDE.md"},
+            extra_env={"FAKE_GIT_FAIL_DIFF_PATH": changed_paths[0]},
         )
         assert result.returncode != 0
         assert "git diff failed" in result.stderr
@@ -2286,7 +2688,7 @@ class TestReviewGitFailureAborts:
         assert "Canonical envelope digest" not in result.stdout
 
     def test_review_partial_git_output_failure_aborts(self, fake_gh_path, fake_git_selective_failure, real_base_head_shas):
-        base, head, count = real_base_head_shas
+        base, head, count, _ = real_base_head_shas
         issue_json, pulls_json = self._fixture_issue_and_pulls(202, base, head, count)
         result = self._run_review(
             fake_gh_path, fake_git_selective_failure, 202, issue_json, pulls_json,
@@ -2297,11 +2699,12 @@ class TestReviewGitFailureAborts:
         assert "Review body" not in result.stdout
 
     def test_review_missing_head_object_aborts(self, fake_gh_path, real_base_head_shas, tmp_path):
-        base, _, count = real_base_head_shas
+        base, _, count, _ = real_base_head_shas
         fake_head = "f" * 40
         issue_json, record = build_dispatch_ready_issue(203, "low", "appr-review-git-head", base_sha=base)
         pulls_json = json.dumps({
-            "base": {"ref": "main", "sha": base}, "head": {"sha": fake_head, "repo": {"id": "R_kgDOTrfRlg"}},
+            "base": {"ref": "main", "sha": base},
+            "head": {"sha": fake_head, "repo": {"id": 1320669590, "node_id": "R_kgDOTrfRlg"}},
             "changed_files": count, "title": "t", "html_url": "https://example/9",
         })
         bin_dir, log_path = fake_gh_path
@@ -2319,11 +2722,12 @@ class TestReviewGitFailureAborts:
         assert "not present locally after fetch" in result.stderr
 
     def test_review_missing_base_object_aborts(self, fake_gh_path, real_base_head_shas):
-        _, head, count = real_base_head_shas
+        _, head, count, _ = real_base_head_shas
         fake_base = "e" * 40
         issue_json, record = build_dispatch_ready_issue(204, "low", "appr-review-git-base", base_sha=fake_base)
         pulls_json = json.dumps({
-            "base": {"ref": "main", "sha": fake_base}, "head": {"sha": head, "repo": {"id": "R_kgDOTrfRlg"}},
+            "base": {"ref": "main", "sha": fake_base},
+            "head": {"sha": head, "repo": {"id": 1320669590, "node_id": "R_kgDOTrfRlg"}},
             "changed_files": count, "title": "t", "html_url": "https://example/9",
         })
         bin_dir, log_path = fake_gh_path
@@ -2340,28 +2744,43 @@ class TestReviewGitFailureAborts:
         assert result.returncode != 0
         assert "not present locally after fetch" in result.stderr
 
-    def test_review_failed_rename_or_deleted_or_binary_or_submodule_diff_aborts(self, fake_gh_path, fake_git_selective_failure, real_base_head_shas):
-        """One shared regression covering the four related paths named
-        in the task (rename, deleted-file, binary, submodule diff
-        generation all funnel through the SAME ai_run_git_capture call
-        this test's injected failure hits) — verified by failing
-        whichever changed path sorts first, proving the abort is not
-        specific to one status code."""
-        base, head, count = real_base_head_shas
+    def test_review_shared_per_file_diff_failure_path_aborts_for_any_changed_file(
+        self, fake_gh_path, fake_git_selective_failure, real_base_head_shas
+    ):
+        """Renamed from a name that implied rename/deleted/binary/
+        submodule status coverage this fixture never actually
+        guaranteed (real_base_head_shas only knows THIS checkout's
+        real HEAD~1..HEAD diff, whatever statuses that happens to
+        contain). What IS actually true, and what this regression-tests
+        for real: review.sh's per-file loop routes every ordinary
+        changed file (rename, delete, binary, submodule, or plain
+        modify alike — see the branching in review.sh around
+        "git diff failed for ... status") through the SAME
+        ai_run_git_capture call, so a diff failure on any one changed
+        path aborts the review the same way regardless of that path's
+        status. Deliberately exercises a DIFFERENT path than
+        test_review_per_file_git_diff_failure_aborts (last vs. first
+        of the real changed-path list) rather than duplicating it
+        outright."""
+        base, head, count, changed_paths = real_base_head_shas
+        if not changed_paths:
+            pytest.skip("HEAD~1..HEAD has no changed paths in this checkout — nothing to inject a diff failure for.")
         issue_json, pulls_json = self._fixture_issue_and_pulls(205, base, head, count)
         result = self._run_review(
             fake_gh_path, fake_git_selective_failure, 205, issue_json, pulls_json,
-            extra_env={"FAKE_GIT_FAIL_DIFF_PATH": "AGENTS.md"},
+            extra_env={"FAKE_GIT_FAIL_DIFF_PATH": changed_paths[-1]},
         )
         assert result.returncode != 0
         assert "git diff failed" in result.stderr
 
     def test_review_failed_submodule_tree_lookup_aborts(self, fake_gh_path, fake_git_selective_failure, real_base_head_shas):
-        base, head, count = real_base_head_shas
+        base, head, count, changed_paths = real_base_head_shas
+        if not changed_paths:
+            pytest.skip("HEAD~1..HEAD has no changed paths in this checkout — nothing to inject an ls-tree failure for.")
         issue_json, pulls_json = self._fixture_issue_and_pulls(206, base, head, count)
         result = self._run_review(
             fake_gh_path, fake_git_selective_failure, 206, issue_json, pulls_json,
-            extra_env={"FAKE_GIT_FAIL_LS_TREE_PATH": "CLAUDE.md"},
+            extra_env={"FAKE_GIT_FAIL_LS_TREE_PATH": changed_paths[0]},
         )
         assert result.returncode != 0
         assert "git ls-tree failed" in result.stderr
@@ -2372,6 +2791,297 @@ class TestReviewGitFailureAborts:
         be captured to a checked file, never `< <(...)`."""
         source = (SCRIPTS_DIR / "review.sh").read_text()
         assert "< <(git" not in source
+
+
+class TestReviewSchemaJson:
+    """Regression coverage for Scripts/ai/review-schema.json's
+    additionalProperties: false fix. This schema is handed to an
+    automated reviewer (claude/codex --output-schema) to constrain its
+    structured output — without additionalProperties: false, a
+    reviewer's response could carry arbitrary extra top-level fields
+    past validation undetected."""
+
+    SCHEMA_PATH = SCRIPTS_DIR / "review-schema.json"
+    EXPECTED_FIELDS = frozenset({"summary", "blocking_findings", "non_blocking_findings", "recommendation"})
+
+    @classmethod
+    def _load(cls):
+        return json.loads(cls.SCHEMA_PATH.read_text())
+
+    def test_valid_json(self):
+        # json.loads raising IS the failure mode here — a bare parse
+        # is the entire assertion.
+        self._load()
+
+    def test_root_type_is_object(self):
+        assert self._load().get("type") == "object"
+
+    def test_additional_properties_is_exactly_false(self):
+        schema = self._load()
+        assert schema.get("additionalProperties") is False, (
+            f"additionalProperties must be the JSON boolean false, got {schema.get('additionalProperties')!r} "
+            "— without it, a reviewer's structured output can carry undeclared extra fields silently."
+        )
+
+    def test_required_fields_equal_declared_properties(self):
+        schema = self._load()
+        required = set(schema.get("required", []))
+        properties = set(schema.get("properties", {}).keys())
+        assert required == properties, (
+            f"required {sorted(required)} and properties {sorted(properties)} must name exactly the same "
+            "fields — additionalProperties: false only closes the door on UNDECLARED fields; a declared-but-"
+            "not-required property would still let a reviewer omit it silently."
+        )
+
+    def test_expected_four_fields_remain_present(self):
+        assert set(self._load().get("properties", {}).keys()) == self.EXPECTED_FIELDS
+
+
+class TestCodexBundleSelfContained:
+    """PR #6 smoke-test defect: the manual Codex review packet told
+    Codex to "read AI_WORKFLOW.md, CONSTITUTION.md, and PROJECT.md
+    yourself" while giving it no shell/git/network access to do so — a
+    real `codex exec` correctly refused to review on that basis. The
+    bundle must be genuinely self-contained: everything Codex is asked
+    to consult is embedded in the prompt it reads from stdin. Codex
+    itself still never gets real repository/shell/network access —
+    that is unchanged and re-verified here, not weakened."""
+
+    ACCEPTANCE_MARKER = "UNIQUE_ACCEPTANCE_MARKER_2b91f7"
+    KNOWN_COMMITTED_SUBSTRING = "Supervised reviewer provenance"
+    WORKTREE_ROOT = REPO_ROOT / "Temp" / "ai-worktrees"
+
+    def _build_fixture(self, issue_number, approval_id, base_sha, allowed_paths=("src/foo.py", "src/bar.py")):
+        issue_body = (
+            "Problem: test fixture for the codex self-contained bundle.\n\n"
+            "Desired outcome: prove the embedded authoritative context.\n\n"
+            "Acceptance criteria:\n"
+            f"- {self.ACCEPTANCE_MARKER} must be satisfied\n"
+        )
+        digest = compute_issue_digest(issue_body)
+        record = {
+            "approval_id": approval_id, "repository_id": "R_kgDOTrfRlg", "issue_number": issue_number,
+            "approver": "gokul-hastrophil", "agent": "claude", "risk": "low",
+            "issue_body_digest": digest, "allowed_paths": list(allowed_paths), "base_sha": base_sha,
+            "timestamp": "2026-01-01T00:00:00Z", "schema": "heimei-approval/v1",
+        }
+        body = "## Approval\n```json\n" + json.dumps(record) + "\n```\n<!-- heimei-approval:v1 -->"
+        issue_json = json.dumps({
+            "number": issue_number, "title": "t", "state": "OPEN",
+            "labels": [{"name": "risk:low"}], "body": issue_body, "url": "u",
+            "comments": [{"id": "c1", "author": {"login": "gokul-hastrophil"}, "body": body, "createdAt": "2026-01-01T00:00:00Z"}],
+        })
+        return issue_json, record
+
+    def _run(self, fake_gh_path, issue_number, approval_id, issue_json, base_sha, head_sha, changed_files, cwd=None):
+        pulls_json = json.dumps({
+            "base": {"ref": "main", "sha": base_sha},
+            "head": {"sha": head_sha, "repo": {"id": 1320669590, "node_id": "R_kgDOTrfRlg"}},
+            "changed_files": changed_files, "title": "t", "html_url": "https://example/codexbundle",
+        })
+        return run_script(
+            "review.sh",
+            ["4", "--issue", str(issue_number), "--approval-id", approval_id,
+             "--implementation-agent", "claude", "--reviewer", "codex"],
+            fake_gh_path,
+            extra_env={"FAKE_GH_ISSUE_JSON": issue_json, "FAKE_GH_PULLS_JSON": pulls_json},
+            cwd=cwd,
+        )
+
+    @staticmethod
+    def _extract_prompt_path(stdout, batch_num=0):
+        m = re.search(r"written to:\s*\n\s*(\S+)", stdout)
+        assert m, f"could not find bundle directory path in stdout: {stdout!r}"
+        return Path(m.group(1)) / f"prompt-batch-{batch_num}.txt"
+
+    def _make_worktree(self, branch_suffix):
+        import uuid
+
+        branch = f"tmp/harness-codexbundle-{branch_suffix}-{uuid.uuid4().hex[:8]}"
+        self.WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
+        wt_dir = self.WORKTREE_ROOT / f"harness-codexbundle-{branch_suffix}-{uuid.uuid4().hex[:8]}"
+        subprocess.run(["git", "worktree", "add", "-q", "-b", branch, str(wt_dir), "HEAD"], cwd=REPO_ROOT, check=True)
+        return branch, wt_dir
+
+    def _cleanup_worktree(self, branch, wt_dir):
+        subprocess.run(["git", "worktree", "remove", "--force", str(wt_dir)], cwd=REPO_ROOT, check=False)
+        subprocess.run(["git", "branch", "-D", branch], cwd=REPO_ROOT, check=False)
+
+    def test_prompt_contains_validated_acceptance_criteria(self, fake_gh_path, real_base_head_shas):
+        base, head, count, changed_paths = real_base_head_shas
+        if not changed_paths:
+            pytest.skip("HEAD~1..HEAD has no changed paths in this checkout.")
+        issue_json, record = self._build_fixture(320, "appr-codexbundle-criteria", base_sha=base)
+        result = self._run(fake_gh_path, 320, "appr-codexbundle-criteria", issue_json, base, head, count)
+        assert result.returncode == 0, result.stderr
+        text = self._extract_prompt_path(result.stdout).read_text()
+        assert self.ACCEPTANCE_MARKER in text
+
+    def test_prompt_contains_approval_id_base_sha_and_allowed_paths(self, fake_gh_path, real_base_head_shas):
+        base, head, count, changed_paths = real_base_head_shas
+        if not changed_paths:
+            pytest.skip("HEAD~1..HEAD has no changed paths in this checkout.")
+        issue_json, record = self._build_fixture(321, "appr-codexbundle-fields", base_sha=base)
+        result = self._run(fake_gh_path, 321, "appr-codexbundle-fields", issue_json, base, head, count)
+        assert result.returncode == 0, result.stderr
+        text = self._extract_prompt_path(result.stdout).read_text()
+        assert "appr-codexbundle-fields" in text
+        assert base in text
+        assert "src/foo.py" in text
+        assert "src/bar.py" in text
+
+    def test_bundle_prompt_is_fully_self_contained(self, fake_gh_path, real_base_head_shas):
+        """Holistic proof of 'usable with no repository access': every
+        section a reviewer would otherwise need to fetch itself is
+        present, inline, in the ONE file Codex reads from stdin."""
+        base, head, count, changed_paths = real_base_head_shas
+        if not changed_paths:
+            pytest.skip("HEAD~1..HEAD has no changed paths in this checkout.")
+        issue_json, record = self._build_fixture(322, "appr-codexbundle-selfcontained", base_sha=base)
+        result = self._run(fake_gh_path, 322, "appr-codexbundle-selfcontained", issue_json, base, head, count)
+        assert result.returncode == 0, result.stderr
+        text = self._extract_prompt_path(result.stdout).read_text()
+        for marker in (
+            "AUTHORITATIVE REVIEW CONTEXT",
+            self.ACCEPTANCE_MARKER,
+            "Trusted approval record",
+            "~~~ AGENTS.md",
+            "~~~ VISION.md",
+            "~~~ CONSTITUTION.md",
+            "~~~ PROJECT.md",
+            "~~~ AI_WORKFLOW.md",
+            "~~~ Projects/Heimei/docs/DEVELOPMENT.md",
+            "~~~ Projects/Heimei/docs/ARCHITECTURE.md",
+            "Privacy boundary",
+            "Live PR body (UNTRUSTED",
+            "=== Batch 0 diff ===",
+        ):
+            assert marker in text, f"missing {marker!r} from a supposedly self-contained prompt"
+
+    def test_prompt_no_longer_instructs_codex_to_read_files_or_shell_out(self, fake_gh_path, real_base_head_shas):
+        base, head, count, changed_paths = real_base_head_shas
+        if not changed_paths:
+            pytest.skip("HEAD~1..HEAD has no changed paths in this checkout.")
+        issue_json, record = self._build_fixture(323, "appr-codexbundle-contract", base_sha=base)
+        result = self._run(fake_gh_path, 323, "appr-codexbundle-contract", issue_json, base, head, count)
+        assert result.returncode == 0, result.stderr
+        text = self._extract_prompt_path(result.stdout).read_text()
+        assert "read AI_WORKFLOW.md, CONSTITUTION.md, and PROJECT.md yourself" not in text
+        assert "you may read repository files" not in text.lower()
+        assert "do not read the working tree, invoke git, execute commands" in text.lower()
+
+    def test_bundle_description_no_longer_claims_diffs_only(self, fake_gh_path, real_base_head_shas):
+        base, head, count, changed_paths = real_base_head_shas
+        if not changed_paths:
+            pytest.skip("HEAD~1..HEAD has no changed paths in this checkout.")
+        issue_json, record = self._build_fixture(324, "appr-codexbundle-desc", base_sha=base)
+        result = self._run(fake_gh_path, 324, "appr-codexbundle-desc", issue_json, base, head, count)
+        assert result.returncode == 0, result.stderr
+        assert "no repository/private-file exposure beyond the diffs themselves" not in result.stdout
+        assert "Self-contained, sanitized bundle" in result.stdout
+
+    def test_governance_extraction_uses_approval_base_sha_never_pr_head(self):
+        """Source-level guard: the governance `git show` calls must key
+        off APPROVAL_BASE_SHA (the validated approval record's own base
+        SHA) — never BASE_SHA/HEAD_SHA (the PR's live, re-fetchable
+        base/head) — so a PR under review can never redefine the rules
+        it is judged against by simply having a different live base."""
+        source = (SCRIPTS_DIR / "review.sh").read_text()
+        assert 'git -C "${PRIMARY_ROOT}" show "${APPROVAL_BASE_SHA}:${doc}"' in source
+
+    def test_governance_context_allowlist_is_fixed_and_excludes_private_paths(self):
+        source = (SCRIPTS_DIR / "review.sh").read_text()
+
+        for required in (
+            "AGENTS.md",
+            "VISION.md",
+            "CONSTITUTION.md",
+            "PROJECT.md",
+            "AI_WORKFLOW.md",
+            "Projects/Heimei/docs/DEVELOPMENT.md",
+            "Projects/Heimei/docs/ARCHITECTURE.md",
+        ):
+            assert required in source
+
+        # A validated issue may add exactly its named canonical ADR.
+        assert "Relevant ADR" in source
+        assert "ADR-[0-9]{4}" in source
+        assert "System/docs/Architecture" in source
+
+        # The zero-text-batch branch distinguishes a genuinely empty PR
+        # from a non-empty PR whose files cannot be AI-reviewed.
+        assert '[[ "${TOTAL_FILES}" -eq 0 ]]' in source
+        assert "zero AI-reviewable text diffs" in source
+
+        # No private/local content source is ever opened by review.sh.
+        for forbidden in (
+            ".envrc",
+            "Knowledge/Documentation/Standards.md",
+            "Configs/",
+            "Scripts/Backup/",
+            "cmd.txt",
+            str(Path.home()),
+        ):
+            assert forbidden not in source
+
+    def test_worktree_dirty_governance_doc_cannot_contaminate_bundle(self, fake_gh_path):
+        """Dynamic proof (not just source inspection): a real,
+        disposable git worktree whose WORKING-TREE copy of
+        AI_WORKFLOW.md is poisoned with a marker never committed
+        anywhere must not leak that marker into the bundle — `git show
+        <sha>:AI_WORKFLOW.md` reads the git object, which the dirty
+        working tree never touches. The real, committed content must
+        still come through, proving this isn't just an empty section."""
+        branch, wt_dir = self._make_worktree("dirty")
+        try:
+            # Real, non-empty base/head pair (this checkout's own
+            # HEAD~1..HEAD, same technique as real_base_head_shas) —
+            # base==head would produce an empty diff, and review.sh
+            # never generates a prompt file for an empty batch. Which
+            # exact SHAs are used is orthogonal to what's under test
+            # here: whether a dirty WORKING-TREE file leaks in.
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD~1"], cwd=wt_dir, capture_output=True, text=True, check=True
+            ).stdout.strip()
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=wt_dir, capture_output=True, text=True, check=True
+            ).stdout.strip()
+            raw = subprocess.run(
+                ["git", "diff", "--name-only", "-z", base, head], cwd=wt_dir, capture_output=True, text=True, check=True
+            ).stdout
+            count = len([p for p in raw.split("\0") if p])
+            if count <= 0:
+                pytest.skip("HEAD~1..HEAD has no changed paths in this checkout.")
+
+            poison = "POISON_MARKER_NEVER_COMMITTED_9f3e1c"
+            workflow_path = wt_dir / "AI_WORKFLOW.md"
+            original = workflow_path.read_text()
+            workflow_path.write_text(original + f"\n\n{poison}\n")
+
+            issue_json, record = self._build_fixture(325, "appr-codexbundle-dirty", base_sha=base)
+            result = self._run(
+                fake_gh_path, 325, "appr-codexbundle-dirty", issue_json, base, head, count, cwd=wt_dir
+            )
+            assert result.returncode == 0, result.stderr
+            text = self._extract_prompt_path(result.stdout).read_text()
+            assert poison not in text, "a dirty working-tree edit leaked into the bundled governance context"
+            assert self.KNOWN_COMMITTED_SUBSTRING in text, "the real, committed governance content did not come through"
+        finally:
+            self._cleanup_worktree(branch, wt_dir)
+
+    def test_missing_governance_doc_at_base_sha_aborts_review(self, fake_gh_path):
+        """A fake, non-existent base SHA must abort bundle generation
+        outright — never proceed with a packet silently missing the
+        governance rules it claims to embed."""
+        fake_base_sha = "f" * 40
+        real_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        issue_json, record = self._build_fixture(326, "appr-codexbundle-missing-gov", base_sha=fake_base_sha)
+        result = self._run(fake_gh_path, 326, "appr-codexbundle-missing-gov", issue_json, real_head, real_head, 0)
+        assert result.returncode != 0
+        assert "Could not extract" in result.stderr
+        assert "refusing to generate a Codex review packet" in result.stderr
 
 
 # ---------------------------------------------------------------------------

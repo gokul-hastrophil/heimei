@@ -57,6 +57,7 @@ LABELS=(
   "status:needs-approval|ededed|Default state - no agent may act on this issue yet"
   "status:approved|0e8a16|Gokul approved scope - authorizes exactly one named agent, see AI_WORKFLOW.md"
   "status:in-progress|fbca04|An agent is actively implementing this issue"
+  "status:draft-pr|0052cc|Draft PR open; awaiting CI and independent review"
   "status:review|1d76db|Draft PR open and CI triggered - not yet owner review"
   "status:owner-review|5319e7|CI green and independent review available - needs Gokul"
   "status:blocked|d73a4a|Correction loop exhausted or a human decision is required"
@@ -114,8 +115,8 @@ GitHub -> Settings -> Branches -> Branch protection rules):
   - Require a pull request before merging (blocks direct pushes to main)
   - Require approvals: at least 1 (Gokul)
   - Require status checks to pass before merging
-      (add your CI workflow's job name(s) here once one exists -
-       see AI_WORKFLOW.md, "CI" and its Next Actions)
+      (required check: "pytest / ruff / mypy" - the job name defined
+       in .github/workflows/ci.yml; see AI_WORKFLOW.md, "CI")
   - Require branches to be up to date before merging
   - Do NOT enable "Allow auto-merge"
   - Do NOT enable "Allow force pushes"

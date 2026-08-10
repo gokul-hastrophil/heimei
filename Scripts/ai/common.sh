@@ -315,14 +315,76 @@ ai_issue_section() {
   printf '%s' "${sections_json}" | jq -er --arg h "${header}" '.[$h] // ""'
 }
 
+# Usage: ai_require_label_exists <repo-slug> <label-name>
+# Confirms a label exists in the REPOSITORY (not on any one issue)
+# before a caller does anything that depends on being able to land it.
+# Fails closed — via ai_die — both when the query itself fails (gh
+# error, auth, network, rate limit) and when the query succeeds but
+# the label genuinely does not exist: this function cannot and must
+# not try to distinguish "doesn't exist" from "transient failure" for
+# the caller, since ai_replace_status_label's whole reason for calling
+# this first is that either case must block ANY mutation, not just
+# one of them. Never auto-creates a label — Scripts/ai/bootstrap-github.sh
+# is the sole place canonical labels are provisioned.
+ai_require_label_exists() {
+  local repo="$1" label_name="$2" existing err_file err_text
+  err_file="$(mktemp)"
+  if ! existing="$(gh label list --repo "${repo}" --json name --jq '.[].name' --limit 200 2>"${err_file}")"; then
+    err_text="$(cat "${err_file}" 2>/dev/null)"
+    rm -f "${err_file}"
+    ai_die "Could not query labels for ${repo} to confirm '${label_name}' exists (gh label list failed: ${err_text:-no output}) — refusing to proceed."
+  fi
+  rm -f "${err_file}"
+  grep -qxF "${label_name}" <<<"${existing}" \
+    || ai_die "Label '${label_name}' does not exist in ${repo} — refusing to proceed. Run Scripts/ai/bootstrap-github.sh --execute to provision canonical labels first."
+}
+
+# Usage: ai_require_pr_head_repo_node_id <pulls-json> <trusted-repo-node-id>
+# Same-repository provenance check, centralized so review.sh's
+# generate path and --post path cannot drift apart on this again.
+#
+# GitHub's REST PR payload carries two distinct repository
+# identifiers: .head.repo.id is the numeric REST/database ID (e.g.
+# 1320669590), .head.repo.node_id is the GraphQL node ID (e.g.
+# "R_kgDOTrfRlg") — the latter is what .ai/policy.toml's repository.id
+# actually stores. This function reads ONLY .node_id, never .id.
+#
+# Uses a checked jq extraction (`select(type == "string" and length >
+# 0)`, `-e`) rather than `// ""` mapping-to-empty-then-checking
+# -n: a prior version did exactly that, which meant a missing, null,
+# empty, numeric, boolean, or array/object node_id all silently
+# resolved to "" and then SKIPPED the comparison entirely (the `-n`
+# guard only reads as "field not present," not "field is bogus").
+# GitHub is not adversarial here, but this check exists precisely to
+# prove same-repository provenance — it must fail closed on anything
+# that isn't a genuine, exactly-matching, non-empty string, not
+# silently pass on absent-or-malformed identity data.
+ai_require_pr_head_repo_node_id() {
+  local pulls_json="$1" trusted_repo_node_id="$2" head_repo_node_id
+  if ! head_repo_node_id="$(jq -er '.head.repo.node_id | select(type == "string" and length > 0)' <<<"${pulls_json}" 2>/dev/null)"; then
+    ai_die "PR head repository node ID (.head.repo.node_id) is missing, null, empty, or not a JSON string — refusing (cannot verify same-repository provenance). Never falls back to .head.repo.id, which is a different, numeric identifier."
+  fi
+  [[ "${head_repo_node_id}" == "${trusted_repo_node_id}" ]] \
+    || ai_die "PR head repository node ID (${head_repo_node_id}) does not match this repository's policy node ID (${trusted_repo_node_id}) — refusing (fork or unexpected cross-repo PR)."
+}
+
 # Usage: ai_replace_status_label <issue-number> <new-label>
 # Removes every existing status:* label and adds exactly the given one
 # — labels are visible workflow state, never authorization (see
 # AI_WORKFLOW.md), but keeping exactly one status:* label at a time
 # keeps that state honest and unambiguous.
+#
+# The destination label's existence in the repository is confirmed
+# (ai_require_label_exists, fail-closed) BEFORE any existing status:*
+# label is removed from the issue. Without this ordering, a missing or
+# misspelled destination label would fail the final --add-label call
+# (set -e-fatal, by design) only AFTER the old status label was already
+# stripped — leaving the issue with no status label at all. Checking
+# first means a failure here leaves the issue exactly as it was found.
 ai_replace_status_label() {
   local issue_number="$1" new_label="$2" repo issue_json existing
   repo="$(ai_repo_slug)"
+  ai_require_label_exists "${repo}" "${new_label}"
   issue_json="$(ai_issue_json "${issue_number}")"
   existing="$(ai_issue_label_names "${issue_json}" | grep '^status:' || true)"
   local label
