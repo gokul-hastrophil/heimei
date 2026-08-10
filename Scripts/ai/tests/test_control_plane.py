@@ -1740,7 +1740,7 @@ class TestReviewShArgumentValidation:
             extra_env={"FAKE_GH_ISSUE_JSON": issue_json, "FAKE_GH_PULLS_JSON": pulls_json},
         )
         assert result.returncode == 0, result.stderr
-        assert "no non-empty diff batch exists" in result.stdout
+        assert "the PR has zero changed files" in result.stdout
         assert "codex exec" not in result.stdout
         _, log_path = fake_gh_path
         calls = log_path.read_text().splitlines()
@@ -1827,7 +1827,7 @@ class TestReviewRepositoryNodeId:
             head_repo={"id": 1320669590, "node_id": self.POLICY_REPO_NODE_ID},
         )
         assert result.returncode == 0, result.stderr
-        assert "no non-empty diff batch exists" in result.stdout
+        assert "the PR has zero changed files" in result.stdout
 
     def test_generation_rejects_different_node_id(self, fake_gh_path):
         issue_json, record = build_dispatch_ready_issue(302, "low", "appr-nodeid-bad")
@@ -2945,9 +2945,14 @@ class TestCodexBundleSelfContained:
             "AUTHORITATIVE REVIEW CONTEXT",
             self.ACCEPTANCE_MARKER,
             "Trusted approval record",
-            "~~~ AI_WORKFLOW.md",
+            "~~~ AGENTS.md",
+            "~~~ VISION.md",
             "~~~ CONSTITUTION.md",
             "~~~ PROJECT.md",
+            "~~~ AI_WORKFLOW.md",
+            "~~~ Projects/Heimei/docs/DEVELOPMENT.md",
+            "~~~ Projects/Heimei/docs/ARCHITECTURE.md",
+            "Privacy boundary",
             "Live PR body (UNTRUSTED",
             "=== Batch 0 diff ===",
         ):
@@ -2986,8 +2991,37 @@ class TestCodexBundleSelfContained:
 
     def test_governance_context_allowlist_is_fixed_and_excludes_private_paths(self):
         source = (SCRIPTS_DIR / "review.sh").read_text()
-        assert "for doc in AI_WORKFLOW.md CONSTITUTION.md PROJECT.md; do" in source
-        for forbidden in (".envrc", "Configs/", "Knowledge/", "Scripts/Backup/", "cmd.txt", str(Path.home())):
+
+        for required in (
+            "AGENTS.md",
+            "VISION.md",
+            "CONSTITUTION.md",
+            "PROJECT.md",
+            "AI_WORKFLOW.md",
+            "Projects/Heimei/docs/DEVELOPMENT.md",
+            "Projects/Heimei/docs/ARCHITECTURE.md",
+        ):
+            assert required in source
+
+        # A validated issue may add exactly its named canonical ADR.
+        assert "Relevant ADR" in source
+        assert "ADR-[0-9]{4}" in source
+        assert "System/docs/Architecture" in source
+
+        # The zero-text-batch branch distinguishes a genuinely empty PR
+        # from a non-empty PR whose files cannot be AI-reviewed.
+        assert '[[ "${TOTAL_FILES}" -eq 0 ]]' in source
+        assert "zero AI-reviewable text diffs" in source
+
+        # No private/local content source is ever opened by review.sh.
+        for forbidden in (
+            ".envrc",
+            "Knowledge/Documentation/Standards.md",
+            "Configs/",
+            "Scripts/Backup/",
+            "cmd.txt",
+            str(Path.home()),
+        ):
             assert forbidden not in source
 
     def test_worktree_dirty_governance_doc_cannot_contaminate_bundle(self, fake_gh_path):
