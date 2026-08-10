@@ -900,6 +900,12 @@ case "$1" in
           pr-not-required)
             echo '{"required_pull_request_reviews":null,"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false},"required_status_checks":{"contexts":["ci"]}}'
             exit 0 ;;
+          review-count-expression)
+            echo '{"required_pull_request_reviews":{"required_approving_review_count":"1+1"},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false},"required_status_checks":{"contexts":["ci"]}}'
+            exit 0 ;;
+          review-count-nonnumeric)
+            echo '{"required_pull_request_reviews":{"required_approving_review_count":"bogus"},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false},"required_status_checks":{"contexts":["ci"]}}'
+            exit 0 ;;
           force-push-allowed)
             echo '{"required_pull_request_reviews":{"required_approving_review_count":1},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":true},"allow_deletions":{"enabled":false},"required_status_checks":{"contexts":["ci"]}}'
             exit 0 ;;
@@ -1080,6 +1086,8 @@ class TestBranchProtectionFailsClosed:
             ("404", "FAILED CLOSED"),
             ("malformed-json", "malformed"),
             ("pr-not-required", "pull-request enforcement"),
+            ("review-count-expression", "pull-request enforcement"),
+            ("review-count-nonnumeric", "pull-request enforcement"),
             ("force-push-allowed", "force pushes"),
             ("deletions-allowed", "branch deletion"),
             ("checks-absent", "required status checks"),

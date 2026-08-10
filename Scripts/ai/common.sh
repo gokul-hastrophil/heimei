@@ -943,7 +943,7 @@ ai_require_branch_protection() {
     esac
   done
 
-  [[ "${pr_required}" == "true" && "${review_count}" -ge 0 ]] \
+  [[ "${pr_required}" == "true" && "${review_count}" =~ ^[0-9]+$ ]] \
     || ai_die "Branch protection for '${branch}' does not confirm pull-request enforcement (required_pull_request_reviews present with a readable non-negative required approval count) — failing closed."
   [[ "${force_push_allowed}" == "false" ]] \
     || ai_die "Branch protection for '${branch}' allows force pushes (or this cannot be confirmed) — failing closed."
