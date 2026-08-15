@@ -113,7 +113,7 @@ GitHub -> Settings -> Branches -> Branch protection rules):
 ================================================================================
 
   - Require a pull request before merging (blocks direct pushes to main)
-  - Require approvals: at least 1 (Gokul)
+  - Required approving reviews: 0 (solo-maintainer governance; PR still required)
   - Require status checks to pass before merging
       (required check: "pytest / ruff / mypy" - the job name defined
        in .github/workflows/ci.yml; see AI_WORKFLOW.md, "CI")
