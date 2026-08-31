@@ -592,8 +592,10 @@ run_claude_reviewer() {
 # a bundle the owner may copy elsewhere to run `codex exec`.
 build_codex_authoritative_context() {
   local out_file="$1"
-  local doc context_tmp raw_context issue_body issue_sections relevant_adr adr_id
+  local doc context_tmp raw_context issue_body issue_sections relevant_adr adr_id adr_number
   local adr_list_tmp adr_path path basename idx
+  local manifest_idx manifest_newpath manifest_basename
+  local new_adr_path="" new_adr_context_file=""
   local -a context_docs=(
     "AGENTS.md"
     "VISION.md"
@@ -629,9 +631,16 @@ build_codex_authoritative_context() {
   relevant_adr="$(printf '%s' "${issue_sections}" | jq -r '."Relevant ADR" // ""')"
 
   adr_id=""
+  adr_number=""
   if [[ "${relevant_adr}" =~ (ADR-[0-9]{4}) ]]; then
     adr_id="${BASH_REMATCH[1]}"
-  elif [[ -n "${relevant_adr}" && "${relevant_adr}" != "None" && "${relevant_adr}" != "N/A" ]]; then
+    # ADR files in this repository are named "<4-digit-number>-slug.md"
+    # (e.g. "0017-heimei-paperclip-boundary.md") — never
+    # "ADR-<number>-slug.md". Matching basenames against the bare
+    # number, not the full "ADR-####" id, is what actually makes ANY
+    # match (existing or new) succeed against a real file in this repo.
+    adr_number="${adr_id#ADR-}"
+  elif [[ -n "${relevant_adr}" && "${relevant_adr}" != "None" && "${relevant_adr}" != "N/A" && "${relevant_adr}" != "New ADR needed" ]]; then
     rm -f "${context_files[@]}" 2>/dev/null || true
     ai_die "Issue Relevant ADR value '${relevant_adr}' does not contain a canonical ADR-#### identifier — refusing ambiguous review context."
   fi
@@ -649,7 +658,7 @@ build_codex_authoritative_context() {
     adr_path=""
     while IFS= read -r path; do
       basename="${path##*/}"
-      if [[ "${basename}" == "${adr_id}"* ]]; then
+      if [[ "${basename}" == "${adr_number}-"* ]]; then
         if [[ -n "${adr_path}" ]]; then
           rm -f "${adr_list_tmp}" "${context_files[@]}" 2>/dev/null || true
           ai_die "More than one ADR path matches ${adr_id} at ${APPROVAL_BASE_SHA} — refusing ambiguous review context."
@@ -659,20 +668,85 @@ build_codex_authoritative_context() {
     done <"${adr_list_tmp}"
     rm -f "${adr_list_tmp}"
 
-    [[ -n "${adr_path}" ]] || {
-      rm -f "${context_files[@]}" 2>/dev/null || true
-      ai_die "Issue names ${adr_id}, but no matching ADR exists at the approval's base SHA (${APPROVAL_BASE_SHA})."
-    }
+    if [[ -n "${adr_path}" ]]; then
+      # Existing ADR: completely unchanged from today. Extracted from the
+      # approval's own immutable base SHA — never PR head, never the
+      # working tree — so a PR under review can never redefine the rules
+      # it is judged against.
+      context_tmp="$(mktemp "${RUN_LOG_DIR}/review-context.XXXXXX")"
+      if ! ai_run_git_capture "${context_tmp}" -- \
+        git -C "${PRIMARY_ROOT}" show "${APPROVAL_BASE_SHA}:${adr_path}"
+      then
+        rm -f "${context_tmp}" "${context_files[@]}" 2>/dev/null || true
+        ai_die "Could not extract ${adr_path} at the approval's base SHA (${APPROVAL_BASE_SHA})."
+      fi
+      context_docs+=("${adr_path}")
+      context_files+=("${context_tmp}")
+    else
+      # Not present at the approval's base SHA. This is expected, not an
+      # error, exactly when the PR under review is itself the PR that
+      # creates ${adr_id} — a new ADR cannot exist before the PR that
+      # adds it, by construction. Resolve that case ONLY from the PR's
+      # own already-validated, locally-fetched changed-file manifest
+      # (built earlier in this script via `git diff --name-status`
+      # against BASE_SHA/HEAD_SHA — never GitHub's patch field, never
+      # the working tree), and only when every one of the checks below
+      # independently holds. Anything short of that falls through to the
+      # original, unmodified failure — a manifest match is necessary but
+      # not sufficient to be trusted as the canonical new ADR.
+      new_adr_path=""
+      for ((manifest_idx = 0; manifest_idx < TOTAL_FILES; manifest_idx++)); do
+        manifest_newpath="${FILE_NEWPATH[$manifest_idx]}"
+        [[ "${manifest_newpath}" == System/docs/Architecture/* ]] || continue
+        manifest_basename="${manifest_newpath##*/}"
+        [[ "${manifest_basename}" == "${adr_number}-"* ]] || continue
+        # Only a genuine addition counts as "newly created by this PR" —
+        # a modified existing path would already have been found above.
+        [[ "${FILE_STATUS[$manifest_idx]:0:1}" == "A" ]] || continue
+        if [[ -n "${new_adr_path}" ]]; then
+          rm -f "${context_files[@]}" "${new_adr_context_file}" 2>/dev/null || true
+          ai_die "More than one ADR path matches ${adr_id} among this PR's own added files — refusing ambiguous review context."
+        fi
+        new_adr_path="${manifest_newpath}"
+      done
 
-    context_tmp="$(mktemp "${RUN_LOG_DIR}/review-context.XXXXXX")"
-    if ! ai_run_git_capture "${context_tmp}" -- \
-      git -C "${PRIMARY_ROOT}" show "${APPROVAL_BASE_SHA}:${adr_path}"
-    then
-      rm -f "${context_tmp}" "${context_files[@]}" 2>/dev/null || true
-      ai_die "Could not extract ${adr_path} at the approval's base SHA (${APPROVAL_BASE_SHA})."
+      if [[ -z "${new_adr_path}" ]]; then
+        rm -f "${context_files[@]}" 2>/dev/null || true
+        ai_die "Issue names ${adr_id}, but no matching ADR exists at the approval's base SHA (${APPROVAL_BASE_SHA})."
+      fi
+
+      # Reject an out-of-scope or denylisted match outright — never treat
+      # a file the approval never authorized as the canonical new ADR,
+      # even if the PR's own manifest happens to contain it.
+      if ai_path_is_denylisted "${new_adr_path}"; then
+        rm -f "${context_files[@]}" "${new_adr_context_file}" 2>/dev/null || true
+        ai_die "Path '${new_adr_path}' matches ${adr_id} and is marked added in this PR's own changed-file manifest, but is hard-denylisted by policy — refusing to treat a denylisted file as the canonical new ADR."
+      fi
+      if ! ai_path_is_allowed "${new_adr_path}" "${ALLOWED_PATHS_NEWLINE}"; then
+        rm -f "${context_files[@]}" "${new_adr_context_file}" 2>/dev/null || true
+        ai_die "Path '${new_adr_path}' matches ${adr_id} and is marked added in this PR's own changed-file manifest, but is outside the approval's allowed paths — refusing to treat an out-of-scope file as the canonical new ADR."
+      fi
+
+      # Defensive double-check: it must genuinely be absent at the
+      # approval base (the ls-tree search above already implies this,
+      # but this checks the exact candidate path directly rather than
+      # trusting that implication alone).
+      if git -C "${PRIMARY_ROOT}" cat-file -e "${APPROVAL_BASE_SHA}:${new_adr_path}" 2>/dev/null; then
+        rm -f "${context_files[@]}" "${new_adr_context_file}" 2>/dev/null || true
+        ai_die "Path '${new_adr_path}' matches ${adr_id} and is marked added in this PR's own manifest, but it already exists at the approval base SHA — refusing an inconsistent new-ADR claim."
+      fi
+
+      # Extract from the exact reviewed PR-head SHA via a checked git
+      # operation — never the working tree, never GitHub's patch field.
+      context_tmp="$(mktemp "${RUN_LOG_DIR}/review-context.XXXXXX")"
+      if ! ai_run_git_capture "${context_tmp}" -- \
+        git -C "${PRIMARY_ROOT}" show "${HEAD_SHA}:${new_adr_path}"
+      then
+        rm -f "${context_tmp}" "${context_files[@]}" 2>/dev/null || true
+        ai_die "Path '${new_adr_path}' matches ${adr_id} and is marked added in this PR's own changed-file manifest, but could not be extracted at the reviewed PR head SHA (${HEAD_SHA}) — refusing."
+      fi
+      new_adr_context_file="${context_tmp}"
     fi
-    context_docs+=("${adr_path}")
-    context_files+=("${context_tmp}")
   fi
 
   # Assemble into a temporary file first, then redact in a separate
@@ -703,6 +777,13 @@ build_codex_authoritative_context() {
       echo "~~~ ${context_docs[$idx]} @ ${APPROVAL_BASE_SHA} ~~~"
       cat "${context_files[$idx]}"
     done
+    if [[ -n "${new_adr_context_file}" ]]; then
+      echo
+      echo "--- NEW ADR proposed BY THIS PR (extracted at the reviewed PR head ${HEAD_SHA} — NOT present at the approved base ${APPROVAL_BASE_SHA}; this is under review, NOT pre-existing accepted architecture; never treat it as background truth the diff below is judged against) ---"
+      echo
+      echo "~~~ ${new_adr_path} @ ${HEAD_SHA} ~~~"
+      cat "${new_adr_context_file}"
+    fi
     echo
     echo "--- Privacy boundary ---"
     echo "Private/local workspace material is intentionally not embedded in this review packet. AI_WORKFLOW.md is authoritative when a general agent entry-point instruction conflicts with that privacy boundary."
@@ -713,16 +794,16 @@ build_codex_authoritative_context() {
     echo "=== END AUTHORITATIVE REVIEW CONTEXT ==="
   } >"${raw_context}"
   then
-    rm -f "${raw_context}" "${context_files[@]}" 2>/dev/null || true
+    rm -f "${raw_context}" "${context_files[@]}" "${new_adr_context_file}" 2>/dev/null || true
     ai_die "Could not assemble the authoritative Codex review context."
   fi
 
   if ! ai_redact <"${raw_context}" >"${out_file}"; then
-    rm -f "${raw_context}" "${context_files[@]}" "${out_file}" 2>/dev/null || true
+    rm -f "${raw_context}" "${context_files[@]}" "${new_adr_context_file}" "${out_file}" 2>/dev/null || true
     ai_die "Could not redact the authoritative Codex review context — refusing to produce a bundle."
   fi
 
-  rm -f "${raw_context}" "${context_files[@]}"
+  rm -f "${raw_context}" "${context_files[@]}" "${new_adr_context_file}"
 }
 
 # Usage: build_codex_batch_prompt <batch-num> <batch-file> <context-file>
