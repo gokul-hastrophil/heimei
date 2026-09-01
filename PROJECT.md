@@ -45,6 +45,8 @@ Everything else under `Projects/Heimei/src/heimei/` (`agents`, `backup`, `bootst
 
 Hardening the AI development control plane (`AI_WORKFLOW.md`, `AGENTS.md`, `.ai/policy.toml`, `Scripts/ai/`) after an adversarial security review found several core claims were not mechanically enforced — see `State/Reports/ai-development-control-plane.md` for the revised design (trusted approval records, exact-commit verification, restricted agent authority) and what remains manual (no branch protection configured on `main` yet; no CI-driven `status:review` transition).
 
+ADR-0017 (Heimei–Paperclip orchestration boundary) has been drafted and is `Status: Proposed` — not yet accepted. See `System/docs/Architecture/0017-heimei-paperclip-boundary.md` and `State/Reports/heimei-paperclip-control-plane.md`; no implementation, deployment, or credential is authorized yet.
+
 ## Immediate roadmap
 
 - **Strategic** (Stage 1 → Stage 6, Digital Twin): `ROADMAP.md` (this directory).
