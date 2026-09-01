@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -3421,3 +3422,591 @@ class TestChangedPathEnumerationFailurePropagation:
         result = run_bash(f"ai_validate_changed_paths '{d}' 'f.txt'", env=env)
         assert result.returncode != 0
         assert "possibly-partial" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Issue #14: review.sh must distinguish an ADR its approved issue's
+# "Relevant ADR" field names that already existed at the approval's
+# IMMUTABLE base SHA from one the very PR under review itself creates.
+# Pre-fix, build_codex_authoritative_context() unconditionally required
+# ANY named ADR to exist at the approval base SHA, which is structurally
+# impossible for the very issues whose entire purpose is to create that
+# ADR — reproduced live against real issue #12 / PR #13 before this fix.
+#
+# These tests drive the REAL Scripts/ai/review.sh as a subprocess against
+# a self-contained local git remote (a throwaway bare repo under
+# tmp_path — never the network, never this repository's own history)
+# and the existing `fake_gh_path` fixture. No part of the fix's own
+# logic is re-implemented in Python; every assertion reads review.sh's
+# actual exit status and its actual assembled review-context file.
+# ---------------------------------------------------------------------------
+
+_REAL_POLICY_TOML = (REPO_ROOT / ".ai" / "policy.toml").read_text()
+_REAL_ISSUE_SECTIONS_PY = (SCRIPTS_DIR / "issue_sections.py").read_text()
+_REAL_POLICY_PY = (SCRIPTS_DIR / "policy.py").read_text()
+_REAL_REDACT_PY = (SCRIPTS_DIR / "redact.py").read_text()
+_MANDATORY_CONTEXT_DOCS = [
+    "AGENTS.md",
+    "VISION.md",
+    "CONSTITUTION.md",
+    "PROJECT.md",
+    "AI_WORKFLOW.md",
+    "Projects/Heimei/docs/DEVELOPMENT.md",
+    "Projects/Heimei/docs/ARCHITECTURE.md",
+]
+
+
+def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, timeout=30)
+
+
+def _git_ok(args: list[str], cwd: Path) -> str:
+    result = _git(args, cwd)
+    assert result.returncode == 0, f"git {args} failed in {cwd}: {result.stderr}"
+    return result.stdout.strip()
+
+
+class TestReviewNewAdrResolution:
+    ISSUE_NUMBER = 9001
+    PR_NUMBER = 9002
+    APPROVAL_ID = "appr-test-9001"
+    # Matches FAKE_GH_SCRIPT's fixed `repo view` response and its pulls
+    # default's head.repo.node_id — this is the value ai_verify_repo_identity
+    # and ai_require_pr_head_repo_node_id must both see agree with our
+    # temp repo's own .ai/policy.toml (copied verbatim from the real one).
+    REPO_NODE_ID = "R_kgDOTrfRlg"
+
+    def _write_common_files(self, workdir: Path, extra: dict[str, str] | None = None) -> None:
+        for doc in _MANDATORY_CONTEXT_DOCS:
+            p = workdir / doc
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(f"placeholder content for {doc}\n")
+        ai_dir = workdir / ".ai"
+        ai_dir.mkdir(parents=True, exist_ok=True)
+        (ai_dir / "policy.toml").write_text(_REAL_POLICY_TOML)
+        scripts_ai = workdir / "Scripts" / "ai"
+        scripts_ai.mkdir(parents=True, exist_ok=True)
+        (scripts_ai / "issue_sections.py").write_text(_REAL_ISSUE_SECTIONS_PY)
+        (scripts_ai / "policy.py").write_text(_REAL_POLICY_PY)
+        (scripts_ai / "redact.py").write_text(_REAL_REDACT_PY)
+        if extra:
+            for rel, content in extra.items():
+                p = workdir / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content)
+
+    def _build_repo(
+        self, tmp_path: Path, *, base_extra: dict[str, str] | None = None, head_extra: dict[str, str] | None = None
+    ) -> tuple[Path, str, str, int]:
+        """Builds a throwaway bare 'origin' + a fresh clone ('primary',
+        the actual PRIMARY_ROOT/cwd review.sh will run against). The
+        clone starts WITHOUT the PR head ref — review.sh's own real
+        `git fetch origin refs/pull/N/head refs/heads/main` is what
+        must bring it in, exercising the real fetch path, not a
+        pre-populated shortcut. Returns (primary_dir, base_sha,
+        head_sha, changed_file_count)."""
+        bare = tmp_path / "origin.git"
+        _git_ok(["init", "--bare", "-q", "-b", "main", str(bare)], tmp_path)
+        # A fresh bare repo has no commits yet, so its HEAD symref may
+        # still point at a default branch name that never receives a
+        # push below (e.g. "master") depending on this host's
+        # init.defaultBranch — an explicit symbolic-ref makes the
+        # later `git clone` actually check main out into the working
+        # tree, rather than cloning an empty tree because HEAD pointed
+        # at a ref that was never created.
+        _git_ok(["symbolic-ref", "HEAD", "refs/heads/main"], bare)
+
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        _git_ok(["init", "-q", "-b", "main", str(scratch)], tmp_path)
+        _git_ok(["config", "user.email", "test@example.invalid"], scratch)
+        _git_ok(["config", "user.name", "Test"], scratch)
+
+        self._write_common_files(scratch, base_extra)
+        _git_ok(["add", "-A"], scratch)
+        _git_ok(["commit", "-q", "-m", "base"], scratch)
+        base_sha = _git_ok(["rev-parse", "HEAD"], scratch)
+        _git_ok(["push", "-q", str(bare), f"{base_sha}:refs/heads/main"], scratch)
+
+        head_sha = base_sha
+        if head_extra:
+            for rel, content in head_extra.items():
+                p = scratch / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content)
+            _git_ok(["add", "-A"], scratch)
+            _git_ok(["commit", "-q", "-m", "head"], scratch)
+            head_sha = _git_ok(["rev-parse", "HEAD"], scratch)
+        _git_ok(["push", "-q", str(bare), f"{head_sha}:refs/pull/{self.PR_NUMBER}/head"], scratch)
+
+        changed_output = _git(["diff", "--name-only", base_sha, head_sha], scratch).stdout
+        changed_count = len([line for line in changed_output.splitlines() if line.strip()])
+
+        primary = tmp_path / "primary"
+        _git_ok(["clone", "-q", str(bare), str(primary)], tmp_path)
+
+        return primary, base_sha, head_sha, changed_count
+
+    def _run_review(
+        self,
+        primary: Path,
+        base_sha: str,
+        head_sha: str,
+        changed_count: int,
+        relevant_adr: str,
+        fake_gh_path,
+        allowed_paths: list[str],
+        reviewer: str = "codex",
+        implementation_agent: str = "claude",
+        extra_path_dir: Path | None = None,
+    ) -> subprocess.CompletedProcess:
+        issue_body = f"### Relevant ADR\n\n{relevant_adr}\n\n### Problem\n\nx\n"
+        digest = compute_issue_digest(issue_body)
+        approval_record = {
+            "schema": "heimei-approval/v1",
+            "approval_id": self.APPROVAL_ID,
+            "repository_id": self.REPO_NODE_ID,
+            "issue_number": self.ISSUE_NUMBER,
+            "approver": "gokul-hastrophil",
+            "agent": implementation_agent,
+            "risk": "medium",
+            "issue_body_digest": digest,
+            "allowed_paths": allowed_paths,
+            "forbidden_paths": [],
+            "base_sha": base_sha,
+            "timestamp": "2026-01-01T00:00:00Z",
+        }
+        approval_comment_body = (
+            "Approved.\n\n```json\n" + json.dumps(approval_record) + "\n```\n\n<!-- heimei-approval:v1 -->\n"
+        )
+        issue_json = json.dumps(
+            {
+                "number": self.ISSUE_NUMBER,
+                "title": "t",
+                "state": "OPEN",
+                "labels": [],
+                "body": issue_body,
+                "url": f"https://example.invalid/issues/{self.ISSUE_NUMBER}",
+                "comments": [{"author": {"login": "gokul-hastrophil"}, "body": approval_comment_body}],
+            }
+        )
+        pulls_json = json.dumps(
+            {
+                "base": {"ref": "main", "sha": base_sha},
+                "head": {"sha": head_sha, "repo": {"id": 1320669590, "node_id": self.REPO_NODE_ID}},
+                "changed_files": changed_count,
+                "title": "t",
+                "html_url": f"https://example.invalid/pull/{self.PR_NUMBER}",
+            }
+        )
+
+        bin_dir, log_path = fake_gh_path
+        env = dict(os.environ)
+        path_prefix = f"{extra_path_dir}:{bin_dir}" if extra_path_dir else str(bin_dir)
+        env["PATH"] = f"{path_prefix}:{env['PATH']}"
+        env["FAKE_GH_LOG"] = str(log_path)
+        env["FAKE_GH_ISSUE_JSON"] = issue_json
+        env["FAKE_GH_PULLS_JSON"] = pulls_json
+
+        return subprocess.run(
+            [
+                str(SCRIPTS_DIR / "review.sh"),
+                str(self.PR_NUMBER),
+                "--issue",
+                str(self.ISSUE_NUMBER),
+                "--approval-id",
+                self.APPROVAL_ID,
+                "--implementation-agent",
+                implementation_agent,
+                "--reviewer",
+                reviewer,
+            ],
+            cwd=str(primary),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        )
+
+    def _read_context(self, primary: Path) -> str:
+        run_dirs = sorted((primary / "Temp" / "ai-runs").glob(f"review-pr-{self.PR_NUMBER}-*"))
+        assert run_dirs, "no review run directory was created under Temp/ai-runs"
+        context_file = run_dirs[-1] / "codex-authoritative-context.txt"
+        assert context_file.is_file(), f"context file missing: {context_file}"
+        return context_file.read_text()
+
+    def _build_selective_fail_bin(self, tmp_path: Path, *, fail_grep: bool = False, fail_sort: bool = False) -> Path:
+        """A PATH directory holding `grep`/`sort` wrappers that delegate
+        to the REAL binaries for every invocation EXCEPT the exact
+        ADR-extraction shapes review.sh uses (`grep -oE 'ADR-[0-9]{4}'`,
+        `sort -u`) — review.sh's OTHER real grep calls (submodule/
+        binary-file detection) must keep working unaffected. When the
+        matching flag is set, the wrapper writes ONE partial line of
+        output, THEN exits non-zero — simulating a crash mid-stream,
+        never a clean "found nothing" (exit 1 with no output at all,
+        which is the one legitimate non-zero outcome the fix accepts)."""
+        real_grep = shutil.which("grep")
+        real_sort = shutil.which("sort")
+        assert real_grep and real_sort, "real grep/sort must be on PATH to build this fixture"
+
+        bin_dir = tmp_path / "selective-fail-bin"
+        bin_dir.mkdir()
+
+        grep_script = bin_dir / "grep"
+        grep_script.write_text(
+            "#!/usr/bin/env bash\n"
+            f'REAL_GREP="{real_grep}"\n'
+            'if [[ "$1" == "-oE" && "$2" == "ADR-[0-9]{4}" ]]; then\n'
+            + ('  printf \'ADR-0001\\n\'\n'
+               '  echo "fake grep: simulated crash mid-extraction" >&2\n'
+               "  exit 2\n" if fail_grep else "  :\n")
+            + 'fi\n'
+            'exec "${REAL_GREP}" "$@"\n'
+        )
+        grep_script.chmod(grep_script.stat().st_mode | stat.S_IEXEC)
+
+        sort_script = bin_dir / "sort"
+        sort_script.write_text(
+            "#!/usr/bin/env bash\n"
+            f'REAL_SORT="{real_sort}"\n'
+            'if [[ "$1" == "-u" ]]; then\n'
+            + ('  printf \'ADR-0001\\n\'\n'
+               '  echo "fake sort: simulated crash mid-deduplication" >&2\n'
+               "  exit 2\n" if fail_sort else "  :\n")
+            + 'fi\n'
+            'exec "${REAL_SORT}" "$@"\n'
+        )
+        sort_script.chmod(sort_script.stat().st_mode | stat.S_IEXEC)
+
+        return bin_dir
+
+    def test_existing_adr_extracted_from_approval_base(self, tmp_path, fake_gh_path):
+        """Case 1/2: an ADR already present at the approval's base SHA
+        must be extracted from that exact base SHA, unchanged from
+        today's behavior, and must NOT be treated as a new-PR ADR."""
+        base_extra = {"System/docs/Architecture/0088-existing.md": "# ADR-0088\n\nStatus: Accepted\n"}
+        head_extra = {"PROJECT.md": "placeholder content for PROJECT.md\nAn unrelated change.\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, base_extra=base_extra, head_extra=head_extra)
+
+        result = self._run_review(
+            primary, base_sha, head_sha, changed, "ADR-0088", fake_gh_path, allowed_paths=["PROJECT.md"]
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+        context = self._read_context(primary)
+        assert f"~~~ System/docs/Architecture/0088-existing.md @ {base_sha} ~~~" in context
+        assert "NEW ADR proposed BY THIS PR" not in context
+
+    def test_new_adr_introduced_by_pr(self, tmp_path, fake_gh_path):
+        """Case 2: an ADR the PR itself adds (absent at base, present at
+        head, in the manifest, inside allowed paths) must be resolved
+        and embedded from the exact reviewed PR-head SHA, labeled as
+        new/under-review — never causing the packet to fail."""
+        adr_path = "System/docs/Architecture/0099-new.md"
+        head_extra = {adr_path: "# ADR-0099\n\nStatus: Proposed\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+
+        result = self._run_review(
+            primary, base_sha, head_sha, changed, "ADR-0099", fake_gh_path, allowed_paths=[adr_path]
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+        context = self._read_context(primary)
+        assert "NEW ADR proposed BY THIS PR" in context
+        assert f"~~~ {adr_path} @ {head_sha} ~~~" in context
+        # Never claim it was also (or instead) extracted from base — it
+        # cannot exist there by construction.
+        assert f"~~~ {adr_path} @ {base_sha}" not in context
+
+    def test_single_canonical_adr_identifier_in_prose_succeeds(self, tmp_path, fake_gh_path):
+        """One distinct ADR identifier embedded in realistic issue-form
+        prose (matching this repository's own actual style, e.g. issue
+        #12's real "Relevant ADR" field) must still resolve cleanly —
+        the multi-identifier extraction must not become MORE strict
+        than the single-match regex it replaces for the common case."""
+        adr_path = "System/docs/Architecture/0099-new.md"
+        head_extra = {adr_path: "# ADR-0099\n\nStatus: Proposed\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+
+        result = self._run_review(
+            primary,
+            base_sha,
+            head_sha,
+            changed,
+            "New ADR needed — proposed **ADR-0099**. Confirmed the next unused number.",
+            fake_gh_path,
+            allowed_paths=[adr_path],
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        context = self._read_context(primary)
+        assert "NEW ADR proposed BY THIS PR" in context
+        assert f"~~~ {adr_path} @ {head_sha} ~~~" in context
+
+    def test_repeated_same_adr_identifier_is_deterministic(self, tmp_path, fake_gh_path):
+        """The same ADR identifier appearing multiple times in the
+        field (e.g. mentioned once when proposed, once again in a
+        closing sentence) is NOT ambiguity — only DISTINCT identifiers
+        count. Must resolve identically to a single mention, every
+        time, not merely 'happen to work' via first-match luck."""
+        adr_path = "System/docs/Architecture/0099-new.md"
+        head_extra = {adr_path: "# ADR-0099\n\nStatus: Proposed\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+
+        relevant_adr = (
+            "New ADR needed — proposed **ADR-0099**. "
+            "Filenames 0001-0015 already exist, so ADR-0099 is the next unused number. "
+            "Do not reuse or renumber ADR-0099 or any other existing ADR."
+        )
+        result = self._run_review(
+            primary, base_sha, head_sha, changed, relevant_adr, fake_gh_path, allowed_paths=[adr_path]
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        context = self._read_context(primary)
+        assert "NEW ADR proposed BY THIS PR" in context
+        assert f"~~~ {adr_path} @ {head_sha} ~~~" in context
+
+        # Run it again — determinism, not "passed once by luck of
+        # `sort -u`/first-match ordering."
+        result2 = self._run_review(
+            primary, base_sha, head_sha, changed, relevant_adr, fake_gh_path, allowed_paths=[adr_path]
+        )
+        assert result2.returncode == 0, result2.stdout + result2.stderr
+
+    def test_two_different_adr_identifiers_rejected_as_ambiguous(self, tmp_path, fake_gh_path):
+        """Two DIFFERENT ADR identifiers named in the same field (e.g.
+        prose explaining that one number is already reserved elsewhere
+        and a different number was chosen instead — exactly the shape
+        of issue #12's own real 'Relevant ADR' text) must fail closed
+        as ambiguous, never silently resolve to whichever matched
+        first."""
+        adr_path = "System/docs/Architecture/0099-new.md"
+        head_extra = {adr_path: "# ADR-0099\n\nStatus: Proposed\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+
+        relevant_adr = "ADR-0098 is already reserved by another issue. Use ADR-0099 instead."
+        result = self._run_review(
+            primary, base_sha, head_sha, changed, relevant_adr, fake_gh_path, allowed_paths=[adr_path]
+        )
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "names more than one distinct ADR identifier" in combined
+        assert "ADR-0098" in combined
+        assert "ADR-0099" in combined
+
+    def test_extraction_pipeline_succeeds_with_real_grep_and_sort(self, tmp_path, fake_gh_path):
+        """Baseline for the checked-pipeline rewrite itself (not just
+        the resolution logic already covered above): running the
+        actual grep|sort pipeline through the selective-fail wrapper
+        bin, with NEITHER stage instructed to fail, must behave
+        identically to using the system's real grep/sort directly —
+        proving the wrapper's pass-through path and the checked
+        PIPESTATUS handling add no overhead or false failure on the
+        successful case."""
+        adr_path = "System/docs/Architecture/0099-new.md"
+        head_extra = {adr_path: "# ADR-0099\n\nStatus: Proposed\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+        wrapper_bin = self._build_selective_fail_bin(tmp_path, fail_grep=False, fail_sort=False)
+
+        result = self._run_review(
+            primary,
+            base_sha,
+            head_sha,
+            changed,
+            "ADR-0099",
+            fake_gh_path,
+            allowed_paths=[adr_path],
+            extra_path_dir=wrapper_bin,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        context = self._read_context(primary)
+        assert "NEW ADR proposed BY THIS PR" in context
+
+    def test_failing_grep_with_partial_output_is_rejected(self, tmp_path, fake_gh_path):
+        """A grep invocation that writes ONE partial identifier and
+        then exits non-zero (simulating a crash mid-extraction, never
+        the legitimate "matched nothing" exit 1 with empty output)
+        must abort the review with the new explicit extraction-failure
+        message — the partial 'ADR-0001' it emitted must never be
+        consumed as if it were a genuine, complete resolution."""
+        adr_path = "System/docs/Architecture/0099-new.md"
+        head_extra = {adr_path: "# ADR-0099\n\nStatus: Proposed\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+        wrapper_bin = self._build_selective_fail_bin(tmp_path, fail_grep=True)
+
+        result = self._run_review(
+            primary,
+            base_sha,
+            head_sha,
+            changed,
+            "ADR-0099",
+            fake_gh_path,
+            allowed_paths=[adr_path],
+            extra_path_dir=wrapper_bin,
+        )
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "Could not extract ADR identifiers from the Relevant ADR field" in combined
+        assert "grep exit 2" in combined
+        # The partial line the fake grep emitted before crashing must
+        # never surface as a resolved identifier anywhere in the
+        # output, and no review run directory should exist claiming
+        # a completed packet.
+        assert "NEW ADR proposed BY THIS PR" not in combined
+        run_dirs = list((primary / "Temp" / "ai-runs").glob(f"review-pr-{self.PR_NUMBER}-*"))
+        for run_dir in run_dirs:
+            context_file = run_dir / "codex-authoritative-context.txt"
+            if context_file.is_file():
+                assert "ADR-0001" not in context_file.read_text()
+
+    def test_failing_sort_with_partial_output_is_rejected(self, tmp_path, fake_gh_path):
+        """A sort invocation that writes ONE partial identifier and
+        then exits non-zero (simulating a crash mid-deduplication)
+        must abort the review the same way — grep having succeeded
+        does not make a subsequently-crashed sort's partial output
+        trustworthy."""
+        adr_path = "System/docs/Architecture/0099-new.md"
+        head_extra = {adr_path: "# ADR-0099\n\nStatus: Proposed\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+        wrapper_bin = self._build_selective_fail_bin(tmp_path, fail_sort=True)
+
+        result = self._run_review(
+            primary,
+            base_sha,
+            head_sha,
+            changed,
+            "ADR-0099",
+            fake_gh_path,
+            allowed_paths=[adr_path],
+            extra_path_dir=wrapper_bin,
+        )
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "Could not extract ADR identifiers from the Relevant ADR field" in combined
+        assert "sort exit 2" in combined
+        assert "NEW ADR proposed BY THIS PR" not in combined
+        run_dirs = list((primary / "Temp" / "ai-runs").glob(f"review-pr-{self.PR_NUMBER}-*"))
+        for run_dir in run_dirs:
+            context_file = run_dir / "codex-authoritative-context.txt"
+            if context_file.is_file():
+                assert "ADR-0001" not in context_file.read_text()
+
+    def test_adr_referenced_but_never_added_dies_with_original_message(self, tmp_path, fake_gh_path):
+        """Case 3 + case 5 combined (they are the same code path in a
+        real base->head diff): an ADR id absent at base AND absent from
+        the PR's own changed-file manifest (whether because it was
+        never added, or never touched at all) is a genuinely broken
+        reference — review.sh must fail with the SAME message it always
+        has, not silently invent a new-ADR match."""
+        head_extra = {"PROJECT.md": "placeholder content for PROJECT.md\nAn unrelated change.\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+
+        result = self._run_review(
+            primary, base_sha, head_sha, changed, "ADR-0099", fake_gh_path, allowed_paths=["PROJECT.md"]
+        )
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert f"Issue names ADR-0099, but no matching ADR exists at the approval's base SHA ({base_sha})." in combined
+
+    def test_new_adr_outside_allowed_paths_is_rejected(self, tmp_path, fake_gh_path):
+        """Case 4: a real, newly-added, in-manifest ADR match must
+        still be rejected if the approval record's own allowed_paths
+        never authorized it — a manifest match is necessary but never
+        sufficient."""
+        adr_path = "System/docs/Architecture/0099-new.md"
+        head_extra = {adr_path: "# ADR-0099\n\nStatus: Proposed\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+
+        # Deliberately do NOT include adr_path in allowed_paths.
+        result = self._run_review(
+            primary, base_sha, head_sha, changed, "ADR-0099", fake_gh_path, allowed_paths=["PROJECT.md"]
+        )
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "outside the approval's allowed paths" in combined
+        assert adr_path in combined
+
+    def test_working_tree_only_file_is_never_trusted(self, tmp_path, fake_gh_path):
+        """Case 6 (working-tree contamination): a file matching the
+        referenced ADR id sitting in PRIMARY_ROOT's working tree, never
+        committed and therefore never part of the PR's own manifest,
+        must be completely invisible to resolution — review.sh must
+        still fail with the original, unmodified message, proving it
+        never falls back to reading the working tree directly."""
+        head_extra = {"PROJECT.md": "placeholder content for PROJECT.md\nAn unrelated change.\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+
+        # Uncommitted, working-tree-only file — never staged, never
+        # pushed, never part of base..head. A naive "just cat the file"
+        # shortcut would find this; the manifest-driven resolution must
+        # not.
+        contaminated = primary / "System" / "docs" / "Architecture" / "0099-new.md"
+        contaminated.parent.mkdir(parents=True, exist_ok=True)
+        contaminated.write_text("# ADR-0099 (never committed — working tree only)\n")
+
+        result = self._run_review(
+            primary, base_sha, head_sha, changed, "ADR-0099", fake_gh_path, allowed_paths=["PROJECT.md"]
+        )
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert f"Issue names ADR-0099, but no matching ADR exists at the approval's base SHA ({base_sha})." in combined
+
+    def test_literal_new_adr_needed_is_not_treated_as_broken_reference(self, tmp_path, fake_gh_path):
+        """Case 7: the architecture issue template's own suggested
+        placeholder, the literal string 'New ADR needed' with no ADR
+        number attached, must be treated the same as 'None'/'N/A' — no
+        ADR resolution attempted, no failure — not as a malformed
+        reference."""
+        head_extra = {"PROJECT.md": "placeholder content for PROJECT.md\nAn unrelated change.\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+
+        result = self._run_review(
+            primary, base_sha, head_sha, changed, "New ADR needed", fake_gh_path, allowed_paths=["PROJECT.md"]
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        context = self._read_context(primary)
+        assert "NEW ADR proposed BY THIS PR" not in context
+
+    def test_malformed_relevant_adr_value_still_dies(self, tmp_path, fake_gh_path):
+        """Case 8a (pre-existing, unchanged guarantee): a Relevant ADR
+        value that is neither None/N/A/'New ADR needed' nor a real
+        ADR-#### reference must still be rejected outright — this fix
+        must not loosen that existing fail-closed behavior."""
+        head_extra = {"PROJECT.md": "placeholder content for PROJECT.md\nAn unrelated change.\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+
+        result = self._run_review(
+            primary,
+            base_sha,
+            head_sha,
+            changed,
+            "some vague reference with no ADR number",
+            fake_gh_path,
+            allowed_paths=["PROJECT.md"],
+        )
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "does not contain a canonical ADR-#### identifier" in combined
+
+    def test_ambiguous_new_adr_paths_rejected(self, tmp_path, fake_gh_path):
+        """Case 8b: two files added by the same PR both matching the
+        same ADR id (e.g. a duplicate/renumbering mistake) must be
+        rejected as ambiguous — mirroring the existing ambiguity guard
+        for the base-SHA case, never silently picking one."""
+        head_extra = {
+            "System/docs/Architecture/0099-a.md": "# ADR-0099 (a)\n",
+            "System/docs/Architecture/0099-b.md": "# ADR-0099 (b)\n",
+        }
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+
+        result = self._run_review(
+            primary,
+            base_sha,
+            head_sha,
+            changed,
+            "ADR-0099",
+            fake_gh_path,
+            allowed_paths=["System/docs/Architecture/0099-a.md", "System/docs/Architecture/0099-b.md"],
+        )
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "More than one ADR path matches ADR-0099 among this PR's own added files" in combined
