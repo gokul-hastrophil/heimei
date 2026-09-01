@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -3557,6 +3558,7 @@ class TestReviewNewAdrResolution:
         allowed_paths: list[str],
         reviewer: str = "codex",
         implementation_agent: str = "claude",
+        extra_path_dir: Path | None = None,
     ) -> subprocess.CompletedProcess:
         issue_body = f"### Relevant ADR\n\n{relevant_adr}\n\n### Problem\n\nx\n"
         digest = compute_issue_digest(issue_body)
@@ -3600,7 +3602,8 @@ class TestReviewNewAdrResolution:
 
         bin_dir, log_path = fake_gh_path
         env = dict(os.environ)
-        env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        path_prefix = f"{extra_path_dir}:{bin_dir}" if extra_path_dir else str(bin_dir)
+        env["PATH"] = f"{path_prefix}:{env['PATH']}"
         env["FAKE_GH_LOG"] = str(log_path)
         env["FAKE_GH_ISSUE_JSON"] = issue_json
         env["FAKE_GH_PULLS_JSON"] = pulls_json
@@ -3631,6 +3634,51 @@ class TestReviewNewAdrResolution:
         context_file = run_dirs[-1] / "codex-authoritative-context.txt"
         assert context_file.is_file(), f"context file missing: {context_file}"
         return context_file.read_text()
+
+    def _build_selective_fail_bin(self, tmp_path: Path, *, fail_grep: bool = False, fail_sort: bool = False) -> Path:
+        """A PATH directory holding `grep`/`sort` wrappers that delegate
+        to the REAL binaries for every invocation EXCEPT the exact
+        ADR-extraction shapes review.sh uses (`grep -oE 'ADR-[0-9]{4}'`,
+        `sort -u`) — review.sh's OTHER real grep calls (submodule/
+        binary-file detection) must keep working unaffected. When the
+        matching flag is set, the wrapper writes ONE partial line of
+        output, THEN exits non-zero — simulating a crash mid-stream,
+        never a clean "found nothing" (exit 1 with no output at all,
+        which is the one legitimate non-zero outcome the fix accepts)."""
+        real_grep = shutil.which("grep")
+        real_sort = shutil.which("sort")
+        assert real_grep and real_sort, "real grep/sort must be on PATH to build this fixture"
+
+        bin_dir = tmp_path / "selective-fail-bin"
+        bin_dir.mkdir()
+
+        grep_script = bin_dir / "grep"
+        grep_script.write_text(
+            "#!/usr/bin/env bash\n"
+            f'REAL_GREP="{real_grep}"\n'
+            'if [[ "$1" == "-oE" && "$2" == "ADR-[0-9]{4}" ]]; then\n'
+            + ('  printf \'ADR-0001\\n\'\n'
+               '  echo "fake grep: simulated crash mid-extraction" >&2\n'
+               "  exit 2\n" if fail_grep else "  :\n")
+            + 'fi\n'
+            'exec "${REAL_GREP}" "$@"\n'
+        )
+        grep_script.chmod(grep_script.stat().st_mode | stat.S_IEXEC)
+
+        sort_script = bin_dir / "sort"
+        sort_script.write_text(
+            "#!/usr/bin/env bash\n"
+            f'REAL_SORT="{real_sort}"\n'
+            'if [[ "$1" == "-u" ]]; then\n'
+            + ('  printf \'ADR-0001\\n\'\n'
+               '  echo "fake sort: simulated crash mid-deduplication" >&2\n'
+               "  exit 2\n" if fail_sort else "  :\n")
+            + 'fi\n'
+            'exec "${REAL_SORT}" "$@"\n'
+        )
+        sort_script.chmod(sort_script.stat().st_mode | stat.S_IEXEC)
+
+        return bin_dir
 
     def test_existing_adr_extracted_from_approval_base(self, tmp_path, fake_gh_path):
         """Case 1/2: an ADR already present at the approval's base SHA
@@ -3744,6 +3792,103 @@ class TestReviewNewAdrResolution:
         assert "names more than one distinct ADR identifier" in combined
         assert "ADR-0098" in combined
         assert "ADR-0099" in combined
+
+    def test_extraction_pipeline_succeeds_with_real_grep_and_sort(self, tmp_path, fake_gh_path):
+        """Baseline for the checked-pipeline rewrite itself (not just
+        the resolution logic already covered above): running the
+        actual grep|sort pipeline through the selective-fail wrapper
+        bin, with NEITHER stage instructed to fail, must behave
+        identically to using the system's real grep/sort directly —
+        proving the wrapper's pass-through path and the checked
+        PIPESTATUS handling add no overhead or false failure on the
+        successful case."""
+        adr_path = "System/docs/Architecture/0099-new.md"
+        head_extra = {adr_path: "# ADR-0099\n\nStatus: Proposed\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+        wrapper_bin = self._build_selective_fail_bin(tmp_path, fail_grep=False, fail_sort=False)
+
+        result = self._run_review(
+            primary,
+            base_sha,
+            head_sha,
+            changed,
+            "ADR-0099",
+            fake_gh_path,
+            allowed_paths=[adr_path],
+            extra_path_dir=wrapper_bin,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        context = self._read_context(primary)
+        assert "NEW ADR proposed BY THIS PR" in context
+
+    def test_failing_grep_with_partial_output_is_rejected(self, tmp_path, fake_gh_path):
+        """A grep invocation that writes ONE partial identifier and
+        then exits non-zero (simulating a crash mid-extraction, never
+        the legitimate "matched nothing" exit 1 with empty output)
+        must abort the review with the new explicit extraction-failure
+        message — the partial 'ADR-0001' it emitted must never be
+        consumed as if it were a genuine, complete resolution."""
+        adr_path = "System/docs/Architecture/0099-new.md"
+        head_extra = {adr_path: "# ADR-0099\n\nStatus: Proposed\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+        wrapper_bin = self._build_selective_fail_bin(tmp_path, fail_grep=True)
+
+        result = self._run_review(
+            primary,
+            base_sha,
+            head_sha,
+            changed,
+            "ADR-0099",
+            fake_gh_path,
+            allowed_paths=[adr_path],
+            extra_path_dir=wrapper_bin,
+        )
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "Could not extract ADR identifiers from the Relevant ADR field" in combined
+        assert "grep exit 2" in combined
+        # The partial line the fake grep emitted before crashing must
+        # never surface as a resolved identifier anywhere in the
+        # output, and no review run directory should exist claiming
+        # a completed packet.
+        assert "NEW ADR proposed BY THIS PR" not in combined
+        run_dirs = list((primary / "Temp" / "ai-runs").glob(f"review-pr-{self.PR_NUMBER}-*"))
+        for run_dir in run_dirs:
+            context_file = run_dir / "codex-authoritative-context.txt"
+            if context_file.is_file():
+                assert "ADR-0001" not in context_file.read_text()
+
+    def test_failing_sort_with_partial_output_is_rejected(self, tmp_path, fake_gh_path):
+        """A sort invocation that writes ONE partial identifier and
+        then exits non-zero (simulating a crash mid-deduplication)
+        must abort the review the same way — grep having succeeded
+        does not make a subsequently-crashed sort's partial output
+        trustworthy."""
+        adr_path = "System/docs/Architecture/0099-new.md"
+        head_extra = {adr_path: "# ADR-0099\n\nStatus: Proposed\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+        wrapper_bin = self._build_selective_fail_bin(tmp_path, fail_sort=True)
+
+        result = self._run_review(
+            primary,
+            base_sha,
+            head_sha,
+            changed,
+            "ADR-0099",
+            fake_gh_path,
+            allowed_paths=[adr_path],
+            extra_path_dir=wrapper_bin,
+        )
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "Could not extract ADR identifiers from the Relevant ADR field" in combined
+        assert "sort exit 2" in combined
+        assert "NEW ADR proposed BY THIS PR" not in combined
+        run_dirs = list((primary / "Temp" / "ai-runs").glob(f"review-pr-{self.PR_NUMBER}-*"))
+        for run_dir in run_dirs:
+            context_file = run_dir / "codex-authoritative-context.txt"
+            if context_file.is_file():
+                assert "ADR-0001" not in context_file.read_text()
 
     def test_adr_referenced_but_never_added_dies_with_original_message(self, tmp_path, fake_gh_path):
         """Case 3 + case 5 combined (they are the same code path in a

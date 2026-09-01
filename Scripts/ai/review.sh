@@ -596,7 +596,9 @@ build_codex_authoritative_context() {
   local adr_list_tmp adr_path path basename idx
   local manifest_idx manifest_newpath manifest_basename
   local new_adr_path="" new_adr_context_file=""
-  local adr_matches_tmp adr_match_count adr_distinct_count
+  local adr_matches_tmp adr_matches_stderr adr_match_count adr_distinct_count
+  local adr_grep_rc adr_sort_rc adr_extract_stderr_excerpt
+  local -a adr_pipestatus
   local -a context_docs=(
     "AGENTS.md"
     "VISION.md"
@@ -642,7 +644,43 @@ build_codex_authoritative_context() {
     # chosen instead) is genuinely ambiguous and must fail closed, not
     # silently resolve to whichever happened to match first.
     adr_matches_tmp="$(mktemp "${RUN_LOG_DIR}/adr-matches.XXXXXX")"
-    grep -oE 'ADR-[0-9]{4}' <<<"${relevant_adr}" | sort -u >"${adr_matches_tmp}" || true
+    adr_matches_stderr="$(mktemp "${RUN_LOG_DIR}/adr-matches-stderr.XXXXXX")"
+
+    # Checked pipeline, never `|| true`: grep exiting 1 (no line
+    # matched) is the ONE expected non-zero outcome — a genuinely
+    # empty identifier set, not a failure — and is the only case this
+    # accepts. Any other grep exit, or any non-zero sort exit, is a
+    # real execution/I-O failure; the pipeline runs as the condition
+    # of `if !`, which is exempt from `set -e`, specifically so this
+    # code — not a swallowed `|| true` — gets to inspect each stage's
+    # own exit status via PIPESTATUS before anything downstream ever
+    # reads the (possibly partial) output file. Mirrors the same
+    # checked-capture discipline ai_run_git_capture already applies to
+    # every git call in this script, adapted for a non-git pipeline
+    # (ai_run_git_capture itself refuses any command not starting with
+    # "git").
+    if ! { grep -oE 'ADR-[0-9]{4}' <<<"${relevant_adr}" | sort -u >"${adr_matches_tmp}"; } 2>"${adr_matches_stderr}"; then
+      # Captured as a single array-copy statement, deliberately: bash
+      # resets PIPESTATUS after EVERY command, including a plain
+      # variable assignment — reading PIPESTATUS[0] and PIPESTATUS[1]
+      # as two SEPARATE assignment statements would make the second
+      # read "PIPESTATUS[1]: unbound variable" (the first assignment
+      # itself becomes the new "last command," collapsing PIPESTATUS
+      # to its own single-element result). Found live via this exact
+      # failure while testing this fix.
+      adr_pipestatus=("${PIPESTATUS[@]}")
+      adr_grep_rc="${adr_pipestatus[0]}"
+      adr_sort_rc="${adr_pipestatus[1]}"
+      if [[ "${adr_grep_rc}" -ne 1 || "${adr_sort_rc}" -ne 0 ]]; then
+        adr_extract_stderr_excerpt="$(ai_redact <"${adr_matches_stderr}" 2>/dev/null | ai_bounded_output 500)"
+        rm -f "${adr_matches_tmp}" "${adr_matches_stderr}" "${context_files[@]}" 2>/dev/null || true
+        ai_die "Could not extract ADR identifiers from the Relevant ADR field (grep exit ${adr_grep_rc}, sort exit ${adr_sort_rc}) — refusing to continue with possibly-partial output. stderr: ${adr_extract_stderr_excerpt}"
+      fi
+      # grep_rc=1, sort_rc=0: grep matched nothing — a valid, complete
+      # empty result. adr_matches_tmp is genuinely empty (sort ran to
+      # completion on empty input), not partial.
+    fi
+    rm -f "${adr_matches_stderr}"
     adr_distinct_count="$(wc -l <"${adr_matches_tmp}" | tr -d ' ')"
 
     if [[ "${adr_distinct_count}" -eq 0 ]]; then
