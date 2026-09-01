@@ -596,6 +596,7 @@ build_codex_authoritative_context() {
   local adr_list_tmp adr_path path basename idx
   local manifest_idx manifest_newpath manifest_basename
   local new_adr_path="" new_adr_context_file=""
+  local adr_matches_tmp adr_match_count adr_distinct_count
   local -a context_docs=(
     "AGENTS.md"
     "VISION.md"
@@ -632,17 +633,34 @@ build_codex_authoritative_context() {
 
   adr_id=""
   adr_number=""
-  if [[ "${relevant_adr}" =~ (ADR-[0-9]{4}) ]]; then
-    adr_id="${BASH_REMATCH[1]}"
+  if [[ -z "${relevant_adr}" || "${relevant_adr}" == "None" || "${relevant_adr}" == "N/A" || "${relevant_adr}" == "New ADR needed" ]]; then
+    : # Explicit (or absent) no-ADR value — do not invent one.
+  else
+    # Extract EVERY distinct ADR-#### identifier the field names, not
+    # just the first `=~` match — a value naming two different ADRs
+    # (e.g. explaining why one number is unavailable and another was
+    # chosen instead) is genuinely ambiguous and must fail closed, not
+    # silently resolve to whichever happened to match first.
+    adr_matches_tmp="$(mktemp "${RUN_LOG_DIR}/adr-matches.XXXXXX")"
+    grep -oE 'ADR-[0-9]{4}' <<<"${relevant_adr}" | sort -u >"${adr_matches_tmp}" || true
+    adr_distinct_count="$(wc -l <"${adr_matches_tmp}" | tr -d ' ')"
+
+    if [[ "${adr_distinct_count}" -eq 0 ]]; then
+      rm -f "${adr_matches_tmp}" "${context_files[@]}" 2>/dev/null || true
+      ai_die "Issue Relevant ADR value '${relevant_adr}' does not contain a canonical ADR-#### identifier — refusing ambiguous review context."
+    elif [[ "${adr_distinct_count}" -gt 1 ]]; then
+      adr_match_count="$(printf '%s' "$(paste -sd, "${adr_matches_tmp}")")"
+      rm -f "${adr_matches_tmp}" "${context_files[@]}" 2>/dev/null || true
+      ai_die "Issue Relevant ADR value '${relevant_adr}' names more than one distinct ADR identifier (${adr_match_count}) — refusing ambiguous review context."
+    fi
+    adr_id="$(head -n1 "${adr_matches_tmp}")"
+    rm -f "${adr_matches_tmp}"
     # ADR files in this repository are named "<4-digit-number>-slug.md"
     # (e.g. "0017-heimei-paperclip-boundary.md") — never
     # "ADR-<number>-slug.md". Matching basenames against the bare
     # number, not the full "ADR-####" id, is what actually makes ANY
     # match (existing or new) succeed against a real file in this repo.
     adr_number="${adr_id#ADR-}"
-  elif [[ -n "${relevant_adr}" && "${relevant_adr}" != "None" && "${relevant_adr}" != "N/A" && "${relevant_adr}" != "New ADR needed" ]]; then
-    rm -f "${context_files[@]}" 2>/dev/null || true
-    ai_die "Issue Relevant ADR value '${relevant_adr}' does not contain a canonical ADR-#### identifier — refusing ambiguous review context."
   fi
 
   if [[ -n "${adr_id}" ]]; then

@@ -3670,6 +3670,81 @@ class TestReviewNewAdrResolution:
         # cannot exist there by construction.
         assert f"~~~ {adr_path} @ {base_sha}" not in context
 
+    def test_single_canonical_adr_identifier_in_prose_succeeds(self, tmp_path, fake_gh_path):
+        """One distinct ADR identifier embedded in realistic issue-form
+        prose (matching this repository's own actual style, e.g. issue
+        #12's real "Relevant ADR" field) must still resolve cleanly —
+        the multi-identifier extraction must not become MORE strict
+        than the single-match regex it replaces for the common case."""
+        adr_path = "System/docs/Architecture/0099-new.md"
+        head_extra = {adr_path: "# ADR-0099\n\nStatus: Proposed\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+
+        result = self._run_review(
+            primary,
+            base_sha,
+            head_sha,
+            changed,
+            "New ADR needed — proposed **ADR-0099**. Confirmed the next unused number.",
+            fake_gh_path,
+            allowed_paths=[adr_path],
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        context = self._read_context(primary)
+        assert "NEW ADR proposed BY THIS PR" in context
+        assert f"~~~ {adr_path} @ {head_sha} ~~~" in context
+
+    def test_repeated_same_adr_identifier_is_deterministic(self, tmp_path, fake_gh_path):
+        """The same ADR identifier appearing multiple times in the
+        field (e.g. mentioned once when proposed, once again in a
+        closing sentence) is NOT ambiguity — only DISTINCT identifiers
+        count. Must resolve identically to a single mention, every
+        time, not merely 'happen to work' via first-match luck."""
+        adr_path = "System/docs/Architecture/0099-new.md"
+        head_extra = {adr_path: "# ADR-0099\n\nStatus: Proposed\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+
+        relevant_adr = (
+            "New ADR needed — proposed **ADR-0099**. "
+            "Filenames 0001-0015 already exist, so ADR-0099 is the next unused number. "
+            "Do not reuse or renumber ADR-0099 or any other existing ADR."
+        )
+        result = self._run_review(
+            primary, base_sha, head_sha, changed, relevant_adr, fake_gh_path, allowed_paths=[adr_path]
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        context = self._read_context(primary)
+        assert "NEW ADR proposed BY THIS PR" in context
+        assert f"~~~ {adr_path} @ {head_sha} ~~~" in context
+
+        # Run it again — determinism, not "passed once by luck of
+        # `sort -u`/first-match ordering."
+        result2 = self._run_review(
+            primary, base_sha, head_sha, changed, relevant_adr, fake_gh_path, allowed_paths=[adr_path]
+        )
+        assert result2.returncode == 0, result2.stdout + result2.stderr
+
+    def test_two_different_adr_identifiers_rejected_as_ambiguous(self, tmp_path, fake_gh_path):
+        """Two DIFFERENT ADR identifiers named in the same field (e.g.
+        prose explaining that one number is already reserved elsewhere
+        and a different number was chosen instead — exactly the shape
+        of issue #12's own real 'Relevant ADR' text) must fail closed
+        as ambiguous, never silently resolve to whichever matched
+        first."""
+        adr_path = "System/docs/Architecture/0099-new.md"
+        head_extra = {adr_path: "# ADR-0099\n\nStatus: Proposed\n"}
+        primary, base_sha, head_sha, changed = self._build_repo(tmp_path, head_extra=head_extra)
+
+        relevant_adr = "ADR-0098 is already reserved by another issue. Use ADR-0099 instead."
+        result = self._run_review(
+            primary, base_sha, head_sha, changed, relevant_adr, fake_gh_path, allowed_paths=[adr_path]
+        )
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "names more than one distinct ADR identifier" in combined
+        assert "ADR-0098" in combined
+        assert "ADR-0099" in combined
+
     def test_adr_referenced_but_never_added_dies_with_original_message(self, tmp_path, fake_gh_path):
         """Case 3 + case 5 combined (they are the same code path in a
         real base->head diff): an ADR id absent at base AND absent from
